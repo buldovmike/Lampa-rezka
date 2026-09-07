@@ -84,16 +84,22 @@ function request(rel, options, onDone, onFail, _retry) {
     var method = options.method || 'GET';
     var body = options.form ? encodeForm(options.form) : null;
     var mode = transportMode();
-    var url, headers = { 'X-Requested-With': 'XMLHttpRequest' };
+    var url, headers = {};
     if (mode === 'proxy') {
         url = proxyUrl() + '?r=' + encodeURIComponent(rel) + '&m=' + encodeURIComponent(mirror());
         headers['X-Rezka-Cookie'] = jarGet();
         if (body) headers['Content-Type'] = 'application/x-www-form-urlencoded';
     } else {
         url = mirror() + rel;
+        headers['X-Requested-With'] = 'XMLHttpRequest';
         if (body) headers['Content-Type'] = 'application/x-www-form-urlencoded';
     }
-    fetch(url, { method: method, headers: headers, body: body, credentials: 'include' })
+    fetch(url, {
+        method: method,
+        headers: headers,
+        body: body,
+        credentials: mode === 'proxy' ? 'omit' : 'include'   // ← ключевая строка
+    })
         .then(function (r) {
             var sc = '';
             try { sc = r.headers.get('x-rezka-set-cookie') || ''; } catch (e) {}
