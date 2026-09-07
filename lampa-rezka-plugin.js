@@ -438,72 +438,97 @@
     });
   }
 
-  // ==================== ВВОД ТЕКСТА (оверлей + живое сохранение) ====================
-  function openInput(opts) {
-    // opts: {title, current, mask, onLive(v), onDone(v), onCancel(), backTo}
-    var original = opts.current || '';
-    var value = original;
-    var closed = false;
-    var liveTimer = 0;
-    var backTo = opts.backTo || 'settings_component';
-    var overlay = $('<div class="rezka-input-overlay">' +
-      '<div class="rezka-input-box">' +
-      '<div class="rezka-input-title">' + esc(opts.title) + '</div>' +
-      '<div class="rezka-input-value"></div>' +
-      '<div class="rezka-input-field"><input type="text" autocomplete="off" class="rezka-input selector" placeholder="Нажмите OK и вводите текст"></div>' +
-      '<div class="rezka-btns">' +
-      '<div class="rezka-btn selector rezka-input-ok">Готово</div>' +
-      '<div class="rezka-btn selector rezka-input-cancel">Отмена</div>' +
-      '</div></div></div>');
-    var input = overlay.find('input');
-    var valueEl = overlay.find('.rezka-input-value');
-    function refresh() { valueEl.text(value ? (opts.mask ? value.replace(/./g, '•') : value) : '…'); }
-    function live() {
-      refresh();
-      if (opts.onLive) {
-        if (liveTimer) clearTimeout(liveTimer);
-        liveTimer = setTimeout(function () { opts.onLive(value); }, 250);
-      }
-    }
-    function sync() {
-      var v = input.val();
-      if (typeof v === 'string' && v !== value) { value = v; live(); }
-    }
-    function close() { closed = true; clearInterval(poll); if (liveTimer) clearTimeout(liveTimer); overlay.remove(); }
-    function finish() { sync(); close(); if (opts.onDone) opts.onDone(value); Lampa.Controller.toggle(backTo); }
-    function cancel() {
-      sync();
-      if (value !== original && opts.onLive) opts.onLive(original);
-      value = original;
-      close();
-      if (opts.onCancel) opts.onCancel();
-      Lampa.Controller.toggle(backTo);
-    }
-    input.val(value); refresh();
-    input.on('input change keyup paste', sync);
-    var poll = setInterval(function () { if (!closed) sync(); }, 300);
-    // системная клавиатура tvOS/Luxo открывается ТОЛЬКО по жесту пользователя (OK на строке)
-    input.on('hover:enter click', function () {
-      try { input[0].focus(); } catch (e) {}
-    });
-    input.on('blur', function () { setTimeout(sync, 200); });
-    overlay.find('.rezka-input-ok').on('hover:enter click', finish);
-    overlay.find('.rezka-input-cancel').on('hover:enter click', cancel);
-    $('body').append(overlay);
-    Lampa.Controller.add('rezka_input', {
-      toggle: function () {
-        Lampa.Controller.collectionSet(overlay.find('.rezka-input-box'));
-        Lampa.Controller.collectionFocus(false, overlay.find('.rezka-input-box'));
-      },
-      up: function () { if (Navigator.canmove('up')) Navigator.move('up'); },
-      down: function () { if (Navigator.canmove('down')) Navigator.move('down'); },
-      left: function () { if (Navigator.canmove('left')) Navigator.move('left'); },
-      right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
-      back: cancel
-    });
-    Lampa.Controller.toggle('rezka_input');
-  }
+  // ==================== ВВОД ТЕКСТА ====================
+// На Apple TV (tvOS) системная клавиатура не открывается программно,
+// поэтому используем встроенную в Lampa экранную клавиатуру (SimpleKeyboard / Input).
+function openInput(title, current, onDone, backTo) {
+    var value = (current || '') + '';
+    var backCtrl = backTo || 'settings_component';
 
+    // 1) Пытаемся использовать Lampa.Input — универсальный компонент Lampa
+    if (typeof Lampa !== 'undefined' && Lampa.Input) {
+        try {
+            var inp = new Lampa.Input({
+                title: title,
+                value: value,
+                free: true
+            });
+            inp.create();
+            inp.run();
+            inp.onBack = function () {
+                try { inp.destroy(); } catch (e) {}
+                Lampa.Controller.toggle(backCtrl);
+            };
+            inp.onComplite = function (v) {
+                try { onDone(typeof v === 'string' ? v : value); } catch (e) {}
+                try { inp.destroy(); } catch (e) {}
+                Lampa.Controller.toggle(backCtrl);
+            };
+            return;
+        } catch (e) { /* падает — идём ниже */ }
+    }
+
+    // 2) Lampa.SimpleKeyboard — старое API, но часто работает
+    if (typeof Lampa !== 'undefined' && Lampa.SimpleKeyboard) {
+        try {
+            var opts = { title: title, input: { value: value } };
+            var kb = (Lampa.SimpleKeyboard.open)
+                ? Lampa.SimpleKeyboard.open(opts)
+                : new Lampa.SimpleKeyboard(opts);
+            if (kb && typeof kb.create === 'function') { kb.create(); if (typeof kb.run === 'function') kb.run(); }
+            kb.onSelect = function (v) {
+                try { onDone(typeof v === 'string' ? v : value); } catch (e) {}
+                try { if (typeof kb.destroy === 'function') kb.destroy(); } catch (e) {}
+                Lampa.Controller.toggle(backCtrl);
+            };
+            kb.onBack = function () {
+                try { if (typeof kb.destroy === 'function') kb.destroy(); } catch (e) {}
+                Lampa.Controller.toggle(backCtrl);
+            };
+            return;
+        } catch (e) { /* падает — идём ниже */ }
+    }
+
+    // 3) Фолбэк: модальное окно с полем + автофокус.
+    // Работает на Android TV / web; на Apple TV поле просто получит фокус,
+    // а ввод — через Remote (iPhone) или Bluetooth-клавиатуру.
+    var html = $(
+        '<div class="rezka-input-fallback">' +
+        '<div class="rezka-input-title" style="margin-bottom:1em;">' + esc(title) + '</div>' +
+        '<input class="selector" type="text" autocomplete="off" value="' +
+        esc(value) + '" style="width:100%;padding:.8em 1em;font-size:1.1em;' +
+        'background:#2a2a2a;border:1px solid #555;color:#fff;border-radius:.4em;">' +
+        '</div>'
+    );
+    Lampa.Modal.open({
+        title: '',
+        html: html,
+        size: 'medium',
+        onBack: function () {
+            Lampa.Modal.close();
+            Lampa.Controller.toggle(backCtrl);
+        }
+    });
+    var input = html.find('input');
+    setTimeout(function () {
+        try { input[0].focus(); input[0].select(); } catch (e) {}
+    }, 300);
+    var lastVal = value;
+    var timer = setInterval(function () {
+        var v = input.val();
+        if (typeof v === 'string' && v !== lastVal) {
+            lastVal = v;
+            try { onDone(v); } catch (e) {}
+        }
+    }, 400);
+    var close = function () {
+        clearInterval(timer);
+        try { onDone(input.val() || ''); } catch (e) {}
+        try { Lampa.Modal.close(); } catch (e) {}
+        Lampa.Controller.toggle(backCtrl);
+    };
+    input.on('keydown', function (e) { if (e.keyCode === 13) { e.preventDefault(); close(); } });
+}
   // ==================== UI: ОБЩИЕ ЭЛЕМЕНТЫ ====================
   function sectionTitle(t) { return $('<div class="rezka-section">' + esc(t) + '</div>'); }
   function cardEl(item, withProgress) {
@@ -880,29 +905,29 @@
     });
   }
 
-  // ==================== НАСТРОЙКИ ====================
-  function textParam(name, title, descr, getVal, setVal, mask) {
+  // ==================== НАСТРОЙКИ (правка textParam) ====================
+function textParam(name, title, descr, getVal, setVal, mask) {
     Lampa.SettingsApi.addParam({
-      component: 'rezka',
-      param: { name: name, type: 'button', default: '' },
-      field: { name: title, description: descr },
-      onRender: function (item) {
-        var v = getVal();
-        item.find('.settings-param__name').text(title + ': ' + (v ? (mask ? '••••••' : v) : '—'));
-      },
-      onChange: function () {
-        openInput({
-          title: title,
-          current: mask ? '' : getVal(),
-          mask: mask,
-          backTo: 'settings_component',
-          onLive: function (v) { setVal(v); },            // живое сохранение на каждое изменение
-          onDone: function () { try { Lampa.Settings.update(); } catch (e) {} },
-          onCancel: function () { try { Lampa.Settings.update(); } catch (e) {} }
-        });
-      }
+        component: 'rezka',
+        param: { name: name, type: 'button', default: '' },
+        field: { name: title, description: descr },
+        onRender: function (item) {
+            var v = getVal();
+            var show = v ? (mask ? '••••••' : v) : '— не задано —';
+            item.find('.settings-param__name').text(title + ': ' + show);
+        },
+        onChange: function () {
+            // ВАЖНО: передаём в openInput текущее значение, чтобы экранная
+            // клавиатура сразу открылась с ним, а не с пустой строкой.
+            var current = getVal() || '';
+            openInput(title, mask ? '' : current, function (v) {
+                if (typeof v === 'string') setVal(v);
+                try { Lampa.Noty.show('Сохранено: ' + title); } catch (e) {}
+                try { Lampa.Settings.update(); } catch (e) {}
+            }, 'settings_component');
+        }
     });
-  }
+}
   function registerSettings() {
     Lampa.SettingsApi.addComponent({
       component: 'rezka',
