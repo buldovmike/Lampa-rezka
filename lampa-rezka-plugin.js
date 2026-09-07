@@ -438,97 +438,6 @@
     });
   }
 
-  // ==================== ВВОД ТЕКСТА ====================
-// На Apple TV (tvOS) системная клавиатура не открывается программно,
-// поэтому используем встроенную в Lampa экранную клавиатуру (SimpleKeyboard / Input).
-function openInput(title, current, onDone, backTo) {
-    var value = (current || '') + '';
-    var backCtrl = backTo || 'settings_component';
-
-    // 1) Пытаемся использовать Lampa.Input — универсальный компонент Lampa
-    if (typeof Lampa !== 'undefined' && Lampa.Input) {
-        try {
-            var inp = new Lampa.Input({
-                title: title,
-                value: value,
-                free: true
-            });
-            inp.create();
-            inp.run();
-            inp.onBack = function () {
-                try { inp.destroy(); } catch (e) {}
-                Lampa.Controller.toggle(backCtrl);
-            };
-            inp.onComplite = function (v) {
-                try { onDone(typeof v === 'string' ? v : value); } catch (e) {}
-                try { inp.destroy(); } catch (e) {}
-                Lampa.Controller.toggle(backCtrl);
-            };
-            return;
-        } catch (e) { /* падает — идём ниже */ }
-    }
-
-    // 2) Lampa.SimpleKeyboard — старое API, но часто работает
-    if (typeof Lampa !== 'undefined' && Lampa.SimpleKeyboard) {
-        try {
-            var opts = { title: title, input: { value: value } };
-            var kb = (Lampa.SimpleKeyboard.open)
-                ? Lampa.SimpleKeyboard.open(opts)
-                : new Lampa.SimpleKeyboard(opts);
-            if (kb && typeof kb.create === 'function') { kb.create(); if (typeof kb.run === 'function') kb.run(); }
-            kb.onSelect = function (v) {
-                try { onDone(typeof v === 'string' ? v : value); } catch (e) {}
-                try { if (typeof kb.destroy === 'function') kb.destroy(); } catch (e) {}
-                Lampa.Controller.toggle(backCtrl);
-            };
-            kb.onBack = function () {
-                try { if (typeof kb.destroy === 'function') kb.destroy(); } catch (e) {}
-                Lampa.Controller.toggle(backCtrl);
-            };
-            return;
-        } catch (e) { /* падает — идём ниже */ }
-    }
-
-    // 3) Фолбэк: модальное окно с полем + автофокус.
-    // Работает на Android TV / web; на Apple TV поле просто получит фокус,
-    // а ввод — через Remote (iPhone) или Bluetooth-клавиатуру.
-    var html = $(
-        '<div class="rezka-input-fallback">' +
-        '<div class="rezka-input-title" style="margin-bottom:1em;">' + esc(title) + '</div>' +
-        '<input class="selector" type="text" autocomplete="off" value="' +
-        esc(value) + '" style="width:100%;padding:.8em 1em;font-size:1.1em;' +
-        'background:#2a2a2a;border:1px solid #555;color:#fff;border-radius:.4em;">' +
-        '</div>'
-    );
-    Lampa.Modal.open({
-        title: '',
-        html: html,
-        size: 'medium',
-        onBack: function () {
-            Lampa.Modal.close();
-            Lampa.Controller.toggle(backCtrl);
-        }
-    });
-    var input = html.find('input');
-    setTimeout(function () {
-        try { input[0].focus(); input[0].select(); } catch (e) {}
-    }, 300);
-    var lastVal = value;
-    var timer = setInterval(function () {
-        var v = input.val();
-        if (typeof v === 'string' && v !== lastVal) {
-            lastVal = v;
-            try { onDone(v); } catch (e) {}
-        }
-    }, 400);
-    var close = function () {
-        clearInterval(timer);
-        try { onDone(input.val() || ''); } catch (e) {}
-        try { Lampa.Modal.close(); } catch (e) {}
-        Lampa.Controller.toggle(backCtrl);
-    };
-    input.on('keydown', function (e) { if (e.keyCode === 13) { e.preventDefault(); close(); } });
-}
   // ==================== UI: ОБЩИЕ ЭЛЕМЕНТЫ ====================
   function sectionTitle(t) { return $('<div class="rezka-section">' + esc(t) + '</div>'); }
   function cardEl(item, withProgress) {
@@ -574,16 +483,15 @@ function openInput(title, current, onDone, backTo) {
     var scroll = new Lampa.Scroll({ mask: true, over: true });
     var last = false, inited = false;
     function openSearch() {
-      if (Lampa.Search && Lampa.Search.open) {
+    if (Lampa.Search && Lampa.Search.open) {
         Lampa.Search.open({ onBack: function () { Lampa.Controller.toggle('content'); } });
         return;
-      }
-      openInput({
-        title: 'Поиск на rezka', current: '', backTo: 'content',
-        onDone: function (text) {
-          if (text) Lampa.Activity.push({ url: '', title: 'Rezka: ' + text, component: COMP_LIST, search: text, page: 1 });
-        }
-      });
+    }
+    // Фолбэк для очень старых сборок — просто переход на экран списка
+    Lampa.Activity.push({
+        url: '', title: 'Результаты', component: COMP_LIST,
+        search: '', page: 1
+    });
     }
     function build() {
       scroll.clear();
@@ -909,110 +817,113 @@ function openInput(title, current, onDone, backTo) {
 function textParam(name, title, descr, getVal, setVal, mask) {
     Lampa.SettingsApi.addParam({
         component: 'rezka',
-        param: { name: name, type: 'button', default: '' },
-        field: { name: title, description: descr },
+        param: {
+            name: name,
+            type: 'input',           // ← встроенный тип с клавиатурой Lampa
+            default: '',
+            values: {}
+        },
+        field: {
+            name: title,
+            description: descr
+        },
         onRender: function (item) {
             var v = getVal();
             var show = v ? (mask ? '••••••' : v) : '— не задано —';
-            item.find('.settings-param__name').text(title + ': ' + show);
+            item.find('.settings-param__value').text(show);
+            item.attr('data-string', mask ? 'false' : 'true');
         },
-        onChange: function () {
-            // ВАЖНО: передаём в openInput текущее значение, чтобы экранная
-            // клавиатура сразу открылась с ним, а не с пустой строкой.
-            var current = getVal() || '';
-            openInput(title, mask ? '' : current, function (v) {
-                if (typeof v === 'string') setVal(v);
-                try { Lampa.Noty.show('Сохранено: ' + title); } catch (e) {}
-                try { Lampa.Settings.update(); } catch (e) {}
-            }, 'settings_component');
+        onChange: function (new_value) {
+            if (typeof new_value === 'string') {
+                setVal(new_value);
+                Lampa.Noty.show('Сохранено: ' + title);
+            }
         }
     });
 }
   function registerSettings() {
     Lampa.SettingsApi.addComponent({
-      component: 'rezka',
-      name: 'HDREZKA',
-      icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 6.5 6 3.5-6 3.5v-7z"/></svg>'
+        component: 'rezka',
+        name: 'HDREZKA',
+        icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 6.5 6 3.5-6 3.5v-7z"/></svg>'
     });
-    textParam('rezka_proxy_btn', 'Прокси (Worker)',
-      'Адрес вашего Cloudflare Workers, например https://xxx.workers.dev/ (обязателен на Apple TV/web)',
-      function () { return stGet('proxy', ''); },
-      function (v) { stSet('proxy', v); });
-    textParam('rezka_proxy_key_btn', 'Ключ worker’а (если задан PROXY_KEY)',
-      'Необязательно: значение переменной окружения PROXY_KEY',
-      function () { return stGet('proxy_key', ''); },
-      function (v) { stSet('proxy_key', v); }, true);
-    textParam('rezka_mirror_btn', 'Зеркало rezka',
-      'Актуальный домен, например https://rezka.fi',
-      function () { return stGet('mirror', 'https://rezka.fi'); },
-      function (v) { stSet('mirror', v || 'https://rezka.fi'); });
-    textParam('rezka_email_btn', 'Email / логин rezka',
-      'От вашего аккаунта rezka',
-      function () { return stGet('email', ''); },
-      function (v) { stSet('email', v); });
-    textParam('rezka_password_btn', 'Пароль rezka',
-      'Хранится только в локальном хранилище Lampa',
-      function () { return stGet('password', ''); },
-      function (v) { stSet('password', v); }, true);
-    textParam('rezka_cookies_btn', 'Cookies вручную (необязательно)',
-      'Строка cookie из браузера, включая PHPSESSID (HttpOnly сами не читаются)',
-      function () { return stGet('cookies', ''); },
-      function (v) { stSet('cookies', v); }, true);
+    
+    textParam('rezka_proxy', 'Прокси (Worker)',
+        'Адрес вашего Cloudflare Worker, например https://xxx.workers.dev/',
+        function () { return stGet('proxy', ''); },
+        function (v) { stSet('proxy', v); });
+        
+    textParam('rezka_mirror', 'Зеркало rezka',
+        'Актуальный домен, например https://rezka.fi',
+        function () { return stGet('mirror', 'https://rezka.fi'); },
+        function (v) { stSet('mirror', v || 'https://rezka.fi'); });
+        
+    textParam('rezka_email', 'Email / логин rezka',
+        'От вашего аккаунта rezka',
+        function () { return stGet('email', ''); },
+        function (v) { stSet('email', v); });
+        
+    textParam('rezka_password', 'Пароль rezka',
+        'Хранится только в локальном хранилище Lampa',
+        function () { return stGet('password', ''); },
+        function (v) { stSet('password', v); }, true);
+        
+    textParam('rezka_cookies', 'Cookies вручную (необязательно)',
+        'Строка cookie из браузера, включая PHPSESSID (HttpOnly)',
+        function () { return stGet('cookies', ''); },
+        function (v) { stSet('cookies', v); }, true);
+
     Lampa.SettingsApi.addParam({
-      component: 'rezka',
-      param: { name: 'rezka_transport', type: 'select', values: { auto: 'Авто', proxy: 'Прокси (Worker)', direct: 'Напрямую' }, default: 'auto' },
-      field: { name: 'Режим запросов', description: 'Авто = прокси, если адрес worker’а задан' },
-      onChange: function (v) { stSet('transport', v); }
+        component: 'rezka',
+        param: {
+            name: 'rezka_transport', type: 'select',
+            values: { auto: 'Авто', proxy: 'Прокси (Worker)', direct: 'Напрямую' },
+            default: 'auto'
+        },
+        field: { name: 'Режим запросов', description: 'Авто = прокси, если адрес worker\'а задан' },
+        onChange: function (v) { stSet('transport', v); }
     });
+
     Lampa.SettingsApi.addParam({
-      component: 'rezka',
-      param: { name: 'rezka_hls', type: 'select', values: { auto: 'Авто', on: 'Через прокси', off: 'Напрямую' }, default: 'auto' },
-      field: { name: 'HLS (m3u8)', description: 'Авто: прямое подключение, если у CDN есть CORS, иначе через worker' },
-      onChange: function (v) { stSet('hls_proxy', v); }
+        component: 'rezka',
+        param: { name: 'rezka_login_btn', type: 'button', default: '' },
+        field: { name: 'Войти на rezka', description: 'Отправляет логин/пароль и сохраняет cookies авторизации' },
+        onChange: function () {
+            Lampa.Noty.show('Rezka: вход…');
+            apiLogin(function (ok, err) {
+                Lampa.Noty.show(ok ? 'Rezka: вход выполнен' : ('Rezka: ' + err), ok ? {} : { style: 'error' });
+                try { Lampa.Settings.update(); } catch (e) {}
+            });
+        }
     });
+    
     Lampa.SettingsApi.addParam({
-      component: 'rezka',
-      param: { name: 'rezka_login_btn', type: 'button', default: '' },
-      field: { name: 'Войти на rezka', description: 'Отправляет логин/пароль и сохраняет cookies авторизации' },
-      onChange: function () {
-        Lampa.Noty.show('Rezka: вход…');
-        apiLogin(function (ok, err) {
-          Lampa.Noty.show(ok ? 'Rezka: вход выполнен' : ('Rezka: ' + err), ok ? {} : { style: 'error' });
-          try { Lampa.Settings.update(); } catch (e) {}
-        });
-      }
+        component: 'rezka',
+        param: { name: 'rezka_test_btn', type: 'button', default: '' },
+        field: { name: 'Тест соединения', description: 'Проверяет прокси и авторизацию' },
+        onChange: function () {
+            Lampa.Noty.show('Rezka: проверка… (' + transportMode() + ')');
+            getText('', null, function (res) {
+                var okHtml = /b-content__inline|<html/i.test(res.text);
+                Lampa.Noty.show('Rezka: ответ ' + res.status + (okHtml ? ', HTML похож на rezka' : ', неожиданный HTML') + (jarHasAuth() ? ', авторизация есть' : ', без авторизации'));
+            }, function (e) { Lampa.Noty.show('Rezka: ошибка ' + e.message, { style: 'error' }); });
+        }
     });
+
     Lampa.SettingsApi.addParam({
-      component: 'rezka',
-      param: { name: 'rezka_test_btn', type: 'button', default: '' },
-      field: { name: 'Тест соединения', description: 'Запрос главной страницы через текущий транспорт' },
-      onChange: function () {
-        Lampa.Noty.show('Rezka: проверка… (' + transportMode() + ')');
-        getText('', null, function (res) {
-          var okHtml = /b-content__inline|<html/i.test(res.text);
-          Lampa.Noty.show('Rezka: ответ ' + res.status + (okHtml ? ', HTML похож на rezka' : ', неожиданный HTML') + (jarHasAuth() ? ', авторизация есть' : ', без авторизации'));
-        }, function (e) { Lampa.Noty.show('Rezka: ошибка ' + e.message, { style: 'error' }); });
-      }
+        component: 'rezka',
+        param: { name: 'rezka_sync', type: 'trigger', default: false },
+        field: { name: 'Синхронизация истории с rezka', description: 'Экспериментально: ajax/send_watching' },
+        onChange: function (v) { stSet('sync', v ? 'true' : ''); }
     });
+
     Lampa.SettingsApi.addParam({
-      component: 'rezka',
-      param: { name: 'rezka_sync', type: 'trigger', default: false },
-      field: { name: 'Синхронизация истории с rezka', description: 'Экспериментально: ajax/send_watching' },
-      onChange: function (v) { stSet('sync', v ? 'true' : ''); }
+        component: 'rezka',
+        param: { name: 'rezka_clear_hist', type: 'button', default: '' },
+        field: { name: 'Очистить историю плагина' },
+        onChange: function () { stSet('history', []); Lampa.Noty.show('История Rezka очищена'); }
     });
-    Lampa.SettingsApi.addParam({
-      component: 'rezka',
-      param: { name: 'rezka_clear_cookies', type: 'button', default: '' },
-      field: { name: 'Сбросить cookies rezka' },
-      onChange: function () { jarClear(); Lampa.Noty.show('Cookies сброшены'); try { Lampa.Settings.update(); } catch (e) {} }
-    });
-    Lampa.SettingsApi.addParam({
-      component: 'rezka',
-      param: { name: 'rezka_clear_hist', type: 'button', default: '' },
-      field: { name: 'Очистить историю плагина' },
-      onChange: function () { stSet('history', []); Lampa.Noty.show('История Rezka очищена'); }
-    });
-  }
+}
 
   // ==================== СТИЛИ / МЕНЮ / СТАРТ ====================
   function addCss() {
@@ -1042,13 +953,6 @@ function textParam(name, title, descr, getVal, setVal, mask) {
       '.rezka-ep__bar{flex:1;height:.4em;background:#3a3a3a;border-radius:.2em;margin:0 1em}' +
       '.rezka-ep__bar>div{height:100%;background:#5c86c5;border-radius:.2em}' +
       '.rezka-ep__pct{width:3.5em;text-align:right;color:#8a8a8a}' +
-      '.rezka-input-overlay{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.88);z-index:999;display:flex;align-items:center;justify-content:center}' +
-      '.rezka-input-box{width:60em;background:#1d1d1d;border-radius:.8em;padding:2em 2.5em}' +
-      '.rezka-input-title{font-size:1.3em;margin-bottom:1em}' +
-      '.rezka-input-value{min-height:2.2em;padding:.6em 1em;background:#2a2a2a;border-radius:.5em;font-size:1.1em;margin-bottom:1.2em;word-break:break-all}' +
-      '.rezka-input-field{margin-bottom:1.2em}' +
-      '.rezka-input{width:100%;padding:.7em 1em;font-size:1.1em;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:.5em;color:#fff}' +
-      '.rezka-input.focus{border-color:#fff}' +
       '</style>');
     $('body').append(Lampa.Template.get('rezka_css', {}, true));
   }
