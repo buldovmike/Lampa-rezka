@@ -380,14 +380,14 @@
             Lampa.Activity.push({ url: '', title: sec.title, component: COMP_LIST, section: sec.path, page: 1 });
         }
         function openSearch() {
-            if (!Lampa.SearchInput) { Lampa.Noty.show('Клавиатура недоступна в этой сборке'); return; }
-            Lampa.SearchInput({
-                input: '',
-                onSearch: function (text) {
-                    if (!text) { Lampa.Controller.toggle('content'); return; }
-                    Lampa.Activity.push({ url: '', title: 'Rezka: ' + text, component: COMP_LIST, search: text, page: 1 });
-                },
-                onBack: function () { Lampa.Controller.toggle('content'); }
+            if (Lampa.Search && Lampa.Search.open) {
+                Lampa.Search.open({
+                    onBack: function () { Lampa.Controller.toggle('content'); }
+                });
+                return;
+            }
+            openInput('Поиск на rezka', '', function (text) {
+                if (text) Lampa.Activity.push({ url: '', title: 'Rezka: ' + text, component: COMP_LIST, search: text, page: 1 });
             });
         }
         function build() {
@@ -696,6 +696,13 @@
             '.rezka-ep__bar{flex:1;height:.4em;background:#3a3a3a;border-radius:.2em;margin:0 1em}' +
             '.rezka-ep__bar>div{height:100%;background:#5c86c5;border-radius:.2em}' +
             '.rezka-ep__pct{width:3.5em;text-align:right;color:#8a8a8a}' +
+            '.rezka-input-overlay{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.88);z-index:999;display:flex;align-items:center;justify-content:center}' +
+            '.rezka-input-box{width:60em;background:#1d1d1d;border-radius:.8em;padding:2em 2.5em}' +
+            '.rezka-input-title{font-size:1.3em;margin-bottom:1em}' +
+            '.rezka-input-value{min-height:2.2em;padding:.6em 1em;background:#2a2a2a;border-radius:.5em;font-size:1.1em;margin-bottom:1.2em;word-break:break-all}' +
+            '.rezka-input-overlay .simple-keyboard{position:static!important;margin:0 0 1.2em 0}' +
+            '.rezka-input-overlay .simple-keyboard-input{width:100%;padding:.7em 1em;font-size:1.1em;background:#2a2a2a;border:1px solid #3a3a3a;border-radius:.5em;color:#fff}' +
+            '.rezka-input-overlay .simple-keyboard-input.focus{border-color:#fff}' +
             '</style>');
         $('body').append(Lampa.Template.get('rezka_css', {}, true));
     }
@@ -709,7 +716,52 @@
         });
         $('.menu .menu__list').eq(0).append(btn);
     }
-            function textParam(name, title, descr, getVal, setVal) {
+    function openInput(title, current, onDone) {
+        var value = current || '';
+        var overlay = $('<div class="rezka-input-overlay">' +
+            '<div class="rezka-input-box">' +
+            '<div class="rezka-input-title">' + esc(title) + '</div>' +
+            '<div class="rezka-input-value"></div>' +
+            '<div class="simple-keyboard"><input type="text" autocomplete="off" class="simple-keyboard-input selector"></div>' +
+            '<div class="rezka-btns">' +
+            '<div class="rezka-btn selector rezka-input-ok">Готово</div>' +
+            '<div class="rezka-btn selector rezka-input-cancel">Отмена</div>' +
+            '</div></div></div>');
+        var input = overlay.find('input');
+        var valueEl = overlay.find('.rezka-input-value');
+        function refresh() { valueEl.text(value || '…'); }
+        function close() { overlay.remove(); }
+        function back() { close(); Lampa.Controller.toggle('settings_component'); }
+        function finish() { close(); onDone(value); Lampa.Controller.toggle('settings_component'); }
+        input.val(value); refresh();
+        input.on('keyup change input', function () { value = input.val(); refresh(); });
+        input.on('hover:enter', function () {
+            input.removeAttr('disabled');
+            input.focus();
+            try {
+                // штатный способ ядра Lampa вызвать нативную клавиатуру на Apple TV
+                if (Lampa.Platform && Lampa.Platform.is('apple_tv')) window.location.assign('lampa://openkeyboard');
+            } catch (e) {}
+        });
+        input.on('keydown', function (e) { if (e.keyCode === 13) finish(); });
+        overlay.find('.rezka-input-ok').on('hover:enter', finish);
+        overlay.find('.rezka-input-cancel').on('hover:enter', back);
+        $('body').append(overlay);
+        Lampa.Controller.add('rezka_input', {
+            toggle: function () {
+                Lampa.Controller.collectionSet(overlay);
+                Lampa.Controller.collectionFocus(false, overlay);
+            },
+            up: function () { if (Navigator.canmove('up')) Navigator.move('up'); },
+            down: function () { if (Navigator.canmove('down')) Navigator.move('down'); },
+            left: function () { if (Navigator.canmove('left')) Navigator.move('left'); },
+            right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
+            back: back
+        });
+        Lampa.Controller.toggle('rezka_input');
+    }
+
+    function textParam(name, title, descr, getVal, setVal) {
         Lampa.SettingsApi.addParam({
             component: 'rezka',
             param: { name: name, type: 'button', default: '' },
@@ -719,20 +771,49 @@
                 item.find('.settings-param__name').text(title + (v ? ': ' + v : ' —'));
             },
             onChange: function () {
-                if (!Lampa.SearchInput) { Lampa.Noty.show('Экранная клавиатура недоступна'); return; }
-                Lampa.SearchInput({
-                    input: getVal(),
-                    onSearch: function (text) {
-                        setVal(text || '');
-                        Lampa.Noty.show('Сохранено: ' + title);
-                        try { Lampa.Settings.update(); } catch (e) {}
-                    },
-                    onBack: function () { Lampa.Controller.toggle('settings_component'); }
+                openInput(title, getVal(), function (text) {
+                    setVal(text);
+                    Lampa.Noty.show('Сохранено: ' + title);
+                    try { Lampa.Settings.update(); } catch (e) {}
                 });
             }
         });
     }
 
+        function registerSearchSource() {
+        if (!Lampa.Search || !Lampa.Search.addSource) return;
+        Lampa.Search.addSource({
+            title: 'HDREZKA',
+            search: function (params, oncomplite) {
+                var query = (params && params.query) || '';
+                if (query.length < 3) { oncomplite([]); return; }
+                getText('search/?do=search&subaction=search&story=' + encodeURIComponent(query), null, function (html) {
+                    var cards = parseList(html).slice(0, 20).map(function (it) {
+                        return {
+                            id: 'rezka_' + Lampa.Utils.hash(it.url),
+                            title: it.title,
+                            original_title: it.title,
+                            release_date: it.year || '0000',
+                            overview: '',
+                            img: it.poster,
+                            rezka_url: it.url,
+                            rezka_type: it.type,
+                            source: 'rezka'
+                        };
+                    });
+                    oncomplite(cards.length ? [{ title: 'HDREZKA', results: cards }] : []);
+                }, function () { oncomplite([]); });
+            },
+            onCancel: function () {},
+            onMore: function (params, close) { close(); },
+            onSelect: function (params, close) {
+                close();
+                var el = params.element || {};
+                Lampa.Activity.push({ url: '', title: el.title || 'Rezka', component: COMP_CARD, card_url: el.rezka_url, page: 1 });
+            }
+        });
+    }
+    
     function registerSettings() {
         Lampa.SettingsApi.addComponent({
             component: 'rezka',
@@ -820,6 +901,7 @@
             }
         };
         registerSettings();
+        registerSearchSource();
         initPlayerHooks();
         addMenuItem();
     }
