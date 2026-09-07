@@ -5,12 +5,30 @@
     const LS_PREFIX = 'rezka_';
 
     function getSetting(key, def = '') {
-        const val = localStorage.getItem(LS_PREFIX + key);
-        return val !== null ? val : def;
+        const name = LS_PREFIX + key;
+        try {
+            if (typeof Lampa !== 'undefined' && Lampa.Storage && typeof Lampa.Storage.get === 'function') {
+                return Lampa.Storage.get(name, def);
+            }
+            const val = localStorage.getItem(name);
+            return val !== null ? val : def;
+        } catch (e) {
+            console.warn('[Rezka] getSetting failed:', e);
+            return def;
+        }
     }
 
     function setSetting(key, value) {
-        localStorage.setItem(LS_PREFIX + key, value);
+        const name = LS_PREFIX + key;
+        try {
+            if (typeof Lampa !== 'undefined' && Lampa.Storage && typeof Lampa.Storage.set === 'function') {
+                Lampa.Storage.set(name, value);
+                return;
+            }
+            localStorage.setItem(name, String(value));
+        } catch (e) {
+            console.warn('[Rezka] setSetting failed:', e);
+        }
     }
 
     function notify(message) {
@@ -376,8 +394,8 @@
         if (typeof Lampa === 'undefined' || !Lampa.SettingsApi) return;
 
         Lampa.SettingsApi.addComponent({
-            name: 'rezka',
-            title: 'Rezka'
+            component: 'rezka',
+            name: 'Rezka'
         });
 
         // Зеркало
@@ -389,7 +407,9 @@
                 default: 'https://rezka.fi',
                 placeholder: 'Рабочее зеркало'
             },
-            field: 'input',
+            field: {
+                name: 'Зеркало'
+            },
             onChange: (value) => setSetting('mirror', value)
         });
 
@@ -402,7 +422,9 @@
                 default: '',
                 placeholder: 'Email / Логин'
             },
-            field: 'input',
+            field: {
+                name: 'Email / Логин'
+            },
             onChange: (value) => setSetting('email', value)
         });
 
@@ -415,7 +437,9 @@
                 default: '',
                 placeholder: 'Пароль'
             },
-            field: 'input',
+            field: {
+                name: 'Пароль'
+            },
             onChange: (value) => setSetting('password', value)
         });
 
@@ -428,8 +452,28 @@
                 default: '',
                 placeholder: 'Cookie авторизации (необязательно)'
             },
-            field: 'input',
+            field: {
+                name: 'Cookie авторизации (необязательно)'
+            },
             onChange: (value) => setSetting('cookies', value)
+        });
+
+        // Диагностика API Lampa
+        Lampa.SettingsApi.addParam({
+            component: 'rezka',
+            param: {
+                type: 'static'
+            },
+            field: {
+                name: 'Lampa API'
+            },
+            onRender: (item) => {
+                item.find('.settings-param__name').text(
+                    (typeof Lampa !== 'undefined' && Lampa.SettingsApi)
+                        ? 'Lampa API: OK'
+                        : 'Lampa API: НЕ НАЙДЕН'
+                );
+            }
         });
 
         // Кнопка "Войти"
@@ -440,8 +484,10 @@
                 type: 'button',
                 default: 'Войти'
             },
-            field: 'button',
-            onClick: () => login()
+            field: {
+                name: 'Войти'
+            },
+            onChange: () => login()
         });
     }
 
@@ -489,12 +535,13 @@
             }
         };
 
-        // Регистрируем источник
-        if (Lampa.Api && Lampa.Api.registerSource) {
-            Lampa.Api.registerSource(source);
-        } else if (Lampa.Platform && Lampa.Platform.addSource) {
-            Lampa.Platform.addSource(source);
-        }
+        // В актуальном runtime Lampa 3.x нет публичного Api.registerSource().
+        // Старый объект source из исходного файла не соответствует контракту
+        // Lampa.Search.addSource(), поэтому не регистрируем его как совместимый.
+        console.warn(
+            '[Rezka] Source adapter is legacy/incompatible with current Lampa API. ' +
+            'Settings UI is fixed; source integration requires a separate Search adapter.'
+        );
     }
 
     // ==================== ИНИЦИАЛИЗАЦИЯ ====================
@@ -512,10 +559,31 @@
         }
     }
 
-    // Запускаем после загрузки Lampa
-    if (typeof Lampa !== 'undefined') {
+    // Надёжный запуск: в актуальной Lampa готовность передаётся
+    // через Lampa.Listener событием 'app' -> { type: 'ready' }.
+    let started = false;
+
+    function boot() {
+        if (started) return;
+        if (typeof Lampa === 'undefined' || !Lampa.SettingsApi) return;
+        started = true;
         init();
+    }
+
+    if (typeof Lampa !== 'undefined') {
+        boot();
+
+        if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
+            Lampa.Listener.follow('app', function (event) {
+                if (event && event.type === 'ready') boot();
+            });
+        }
     } else {
-        window.addEventListener('lampa-ready', init);
+        const timer = setInterval(function () {
+            if (typeof Lampa !== 'undefined' && Lampa.SettingsApi) {
+                clearInterval(timer);
+                boot();
+            }
+        }, 250);
     }
 })();
