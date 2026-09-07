@@ -1,6 +1,36 @@
 (function() {
     'use strict';
 
+    // Lampa plugin metadata. The Extensions manager uses this to identify the plugin.
+    const manifest = {
+        type: 'video',
+        version: '1.2.0-ui-fix',
+        name: 'HDREZKA Lab',
+        description: 'Лабораторный интерфейс авторизации и настройки для Lampa/Luxo',
+        component: 'rezka'
+    };
+
+    function registerManifest() {
+        try {
+            if (typeof Lampa === 'undefined') return;
+            if (!Lampa.Manifest) Lampa.Manifest = {};
+            // Current Lampa builds accept a single manifest object here; older/custom
+            // builds may expose an array or object, so preserve an existing collection.
+            if (Array.isArray(Lampa.Manifest.plugins)) {
+                if (!Lampa.Manifest.plugins.some(p => p && p.component === manifest.component)) {
+                    Lampa.Manifest.plugins.push(manifest);
+                }
+            } else if (Lampa.Manifest.plugins && typeof Lampa.Manifest.plugins === 'object'
+                       && !Lampa.Manifest.plugins.type) {
+                Lampa.Manifest.plugins[manifest.component] = manifest;
+            } else {
+                Lampa.Manifest.plugins = manifest;
+            }
+        } catch (e) {
+            console.warn('[Rezka] manifest registration failed:', e);
+        }
+    }
+
     // ==================== УТИЛИТЫ ====================
     const LS_PREFIX = 'rezka_';
 
@@ -458,24 +488,6 @@
             onChange: (value) => setSetting('cookies', value)
         });
 
-        // Диагностика API Lampa
-        Lampa.SettingsApi.addParam({
-            component: 'rezka',
-            param: {
-                type: 'static'
-            },
-            field: {
-                name: 'Lampa API'
-            },
-            onRender: (item) => {
-                item.find('.settings-param__name').text(
-                    (typeof Lampa !== 'undefined' && Lampa.SettingsApi)
-                        ? 'Lampa API: OK'
-                        : 'Lampa API: НЕ НАЙДЕН'
-                );
-            }
-        });
-
         // Кнопка "Войти"
         Lampa.SettingsApi.addParam({
             component: 'rezka',
@@ -493,70 +505,18 @@
 
     // ==================== РЕГИСТРАЦИЯ ИСТОЧНИКА ====================
     function registerSource() {
-        if (typeof Lampa === 'undefined') return;
-
-        const source = {
-            name: 'Rezka',
-            type: 'catalog',
-            search: async function(query, page, callback) {
-                try {
-                    await ensureAuth();
-                    const mirror = getMirror();
-                    const url = mirror + 'engine/ajax/search.php?q=' + encodeURIComponent(query);
-                    const response = await request(url);
-                    const html = await response.text();
-                    const results = parseSearchResults(html);
-                    callback(results);
-                } catch (e) {
-                    notify('Ошибка поиска: ' + e.message);
-                    callback([]);
-                }
-            },
-            info: async function(id, callback) {
-                try {
-                    await ensureAuth();
-                    const response = await request(id);
-                    const html = await response.text();
-                    const info = await parseInfoPage(html, id);
-                    callback(info);
-                } catch (e) {
-                    notify('Ошибка загрузки информации: ' + e.message);
-                    callback(null);
-                }
-            },
-            resolve: async function(item, callback) {
-                try {
-                    const videoObject = await resolveVideo(item);
-                    callback(videoObject);
-                } catch (e) {
-                    notify('Ошибка получения ссылки: ' + e.message);
-                    callback(null);
-                }
-            }
-        };
-
-        // В актуальном runtime Lampa 3.x нет публичного Api.registerSource().
-        // Старый объект source из исходного файла не соответствует контракту
-        // Lampa.Search.addSource(), поэтому не регистрируем его как совместимый.
-        console.warn(
-            '[Rezka] Source adapter is legacy/incompatible with current Lampa API. ' +
-            'Settings UI is fixed; source integration requires a separate Search adapter.'
-        );
+        // Intentionally not registering the legacy Rezka source here.
+        // The current Lampa source API is different from the old registerSource contract.
+        console.info('[Rezka] UI/auth shell loaded; source adapter is disabled in this build.');
     }
 
     // ==================== ИНИЦИАЛИЗАЦИЯ ====================
     function init() {
+        registerManifest();
         registerSettings();
         registerSource();
 
-        // Если нет cookies, но есть email и пароль, пробуем войти
-        if (!getCookies()) {
-            const email = getSetting('email');
-            const password = getSetting('password');
-            if (email && password) {
-                login();
-            }
-        }
+        // Authentication is explicit: no silent credential submission during plugin startup.
     }
 
     // Надёжный запуск: в актуальной Lampa готовность передаётся
