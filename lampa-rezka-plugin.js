@@ -709,18 +709,26 @@
         });
         $('.menu .menu__list').eq(0).append(btn);
     }
-    function registerSettings() {
-        Lampa.SettingsApi.addComponent({ component: 'rezka', name: 'HDREZKA', icon: '' });
+        function registerSettings() {
+        Lampa.SettingsApi.addComponent({
+            component: 'rezka',
+            name: 'HDREZKA',
+            icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 6.5 6 3.5-6 3.5v-7z"/></svg>'
+        });
         Lampa.SettingsApi.addParam({
             component: 'rezka',
             param: { name: 'rezka_proxy', type: 'input', default: '' },
-            field: { name: 'Прокси (Cloudflare Worker)', description: 'Обязательно на Apple TV/web: адрес вашего worker, например https://rezka-proxy.username.workers.dev' },
+            field: { name: 'Прокси (Cloudflare Worker)', description: 'Обязательно на Apple TV/web: адрес вашего worker, например https://dry-haze-1b64.misha-buldov2000.workers.dev' },
             onChange: function (v) { stSet('proxy', v || ''); }
         });
         Lampa.SettingsApi.addParam({
             component: 'rezka',
-            param: { name: 'rezka_transport', type: 'select', values: 'auto,proxy,direct', default: 'auto' },
-            field: { name: 'Режим запросов', description: 'auto = прокси, если задан; direct — напрямую (часто блокируется CORS)' },
+            param: {
+                name: 'rezka_transport', type: 'select',
+                values: { auto: 'Авто', proxy: 'Прокси (Worker)', direct: 'Напрямую' },
+                default: 'auto'
+            },
+            field: { name: 'Режим запросов', description: 'Авто = прокси, если адрес задан; напрямую обычно блокируется CORS' },
             onChange: function (v) { stSet('transport', v); }
         });
         Lampa.SettingsApi.addParam({
@@ -737,8 +745,8 @@
         });
         Lampa.SettingsApi.addParam({
             component: 'rezka',
-            param: { name: 'rezka_password', type: 'password', default: '' },
-            field: { name: 'Пароль rezka' },
+            param: { name: 'rezka_password', type: 'input', default: '' },
+            field: { name: 'Пароль rezka', description: 'Хранится только в локальном хранилище Lampa' },
             onChange: function (v) { stSet('password', v || ''); }
         });
         Lampa.SettingsApi.addParam({
@@ -747,7 +755,9 @@
             field: { name: 'Войти на rezka', description: 'Отправляет логин/пароль и сохраняет cookies' },
             onChange: function () {
                 Lampa.Noty.show('Rezka: вход…');
-                apiLogin(function (ok, err) { Lampa.Noty.show(ok ? 'Rezka: вход выполнен' : ('Rezka: ' + err), ok ? {} : { style: 'error' }); });
+                apiLogin(function (ok, err) {
+                    Lampa.Noty.show(ok ? 'Rezka: вход выполнен' : ('Rezka: ' + err), ok ? {} : { style: 'error' });
+                });
             }
         });
         Lampa.SettingsApi.addParam({
@@ -759,7 +769,7 @@
         Lampa.SettingsApi.addParam({
             component: 'rezka',
             param: { name: 'rezka_sync', type: 'trigger', default: false },
-            field: { name: 'Синхронизация истории с rezka', description: 'Экспериментально: слать ajax/send_watching (формат параметров может отличаться)' },
+            field: { name: 'Синхронизация истории с rezka', description: 'Экспериментально: слать ajax/send_watching' },
             onChange: function (v) { stSet('sync', v ? 'true' : ''); }
         });
         Lampa.SettingsApi.addParam({
