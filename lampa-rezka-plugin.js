@@ -386,10 +386,74 @@
                 });
                 return;
             }
-            openInput('Поиск на rezka', '', function (text) {
-                if (text) Lampa.Activity.push({ url: '', title: 'Rezka: ' + text, component: COMP_LIST, search: text, page: 1 });
-            });
+     function openInput(title, current, onDone) {
+        var value = current || '';
+        var closed = false;
+        var overlay = $('<div class="rezka-input-overlay">' +
+            '<div class="rezka-input-box">' +
+            '<div class="rezka-input-title">' + esc(title) + '</div>' +
+            '<div class="rezka-input-value"></div>' +
+            '<div class="simple-keyboard"><input type="text" autocomplete="off" class="simple-keyboard-input selector"></div>' +
+            '<div class="rezka-btns">' +
+            '<div class="rezka-btn selector rezka-input-ok">Готово</div>' +
+            '<div class="rezka-btn selector rezka-input-cancel">Отмена</div>' +
+            '</div></div></div>');
+        var input = overlay.find('input');
+        var valueEl = overlay.find('.rezka-input-value');
+
+        function refresh() { valueEl.text(value || '…'); }
+        // Читает значение НАПРЯМУЮ из поля: нативная клавиатура Apple TV и
+        // удалённый ввод могут вставлять текст без событий keyup/change/input
+        function sync() {
+            var v = input.val();
+            if (typeof v === 'string' && v !== value) { value = v; refresh(); }
         }
+        function close() {
+            closed = true;
+            clearInterval(poll);
+            overlay.remove();
+        }
+        function back() { close(); Lampa.Controller.toggle('settings_component'); }
+        function finish() {
+            sync();
+            var v = value;
+            close();
+            onDone(v);
+            Lampa.Controller.toggle('settings_component');
+        }
+
+        input.val(value); refresh();
+        input.on('keyup change input', sync);
+
+        // Страховка: опрашиваем поле, пока оверлей открыт
+        var poll = setInterval(function () { if (!closed) sync(); }, 300);
+
+        input.on('hover:enter', function () {
+            input.removeAttr('disabled');
+            input.focus();
+            try {
+                if (Lampa.Platform && Lampa.Platform.is('apple_tv')) window.location.assign('lampa://openkeyboard');
+            } catch (e) {}
+        });
+        input.on('keydown', function (e) { if (e.keyCode === 13) finish(); });
+        overlay.find('.rezka-input-ok').on('hover:focus', sync);
+        overlay.find('.rezka-input-ok').on('hover:enter', finish);
+        overlay.find('.rezka-input-cancel').on('hover:enter', back);
+
+        $('body').append(overlay);
+        Lampa.Controller.add('rezka_input', {
+            toggle: function () {
+                Lampa.Controller.collectionSet(overlay);
+                Lampa.Controller.collectionFocus(false, overlay);
+            },
+            up: function () { if (Navigator.canmove('up')) Navigator.move('up'); },
+            down: function () { if (Navigator.canmove('down')) Navigator.move('down'); },
+            left: function () { if (Navigator.canmove('left')) Navigator.move('left'); },
+            right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
+            back: back
+        });
+        Lampa.Controller.toggle('rezka_input');
+    }
         function build() {
             scroll.clear();
             var hist = histGet();
