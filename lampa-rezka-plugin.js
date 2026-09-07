@@ -1,13 +1,14 @@
 /**
 HDREZKA for Lampa/Luxo (Apple TV / web / Android)
-v2.4.1 — настройки через встроенный type:'input' (клавиатура Lampa/tvOS),
-без собственных оверлеев ввода; нормализация worker-URL; внятные ошибки транспорта.
+v2.4.2 — исправлен «Тест соединения» (аргументы getText), добавлены
+«Диагностика входа» и «Сбросить секреты»; логин показывает кусок ответа сервера.
 */
 (function () {
 'use strict';
 if (window.rezka_plugin_ready) return;
 window.rezka_plugin_ready = true;
 var COMP_MAIN = 'rezka_main', COMP_LIST = 'rezka_list', COMP_CARD = 'rezka_card';
+function log() { try { console.log.apply(console, ['[rezka]'].concat([].slice.call(arguments))); } catch (e) {} }
 
 // ==================== ХРАНИЛИЩЕ / УТИЛИТЫ ====================
 function stGet(k, d) { return Lampa.Storage.get('rezka_' + k, d === undefined ? '' : d); }
@@ -25,7 +26,7 @@ function mirror() {
 function proxyUrl() {
     var p = (stGet('proxy', '') || '').trim().replace(/\s+/g, '');
     if (!p) return '';
-    if (!/^https?:\/\//i.test(p)) p = 'https://' + p;   // пользователь мог ввести без схемы
+    if (!/^https?:\/\//i.test(p)) p = 'https://' + p;
     if (p.slice(-1) !== '/') p += '/';
     return p;
 }
@@ -56,6 +57,7 @@ function relOf(href) {
 }
 function textOf(el) { return el ? el.textContent.trim() : ''; }
 function nodeList(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+function snippet(s, n) { return String(s || '').replace(/\s+/g, ' ').slice(0, n || 100); }
 
 // ==================== COOKIE-JAR ====================
 function jarGet() { return stGet('cookies', '') || ''; }
@@ -94,15 +96,15 @@ function request(rel, options, onDone, onFail, _retry) {
         headers['X-Requested-With'] = 'XMLHttpRequest';
         if (body) headers['Content-Type'] = 'application/x-www-form-urlencoded';
     }
+    log('req', mode, method, url);
     fetch(url, {
-        method: method,
-        headers: headers,
-        body: body,
-        credentials: mode === 'proxy' ? 'omit' : 'include'   // ← ключевая строка
+        method: method, headers: headers, body: body,
+        credentials: mode === 'proxy' ? 'omit' : 'include'
     })
         .then(function (r) {
             var sc = '';
             try { sc = r.headers.get('x-rezka-set-cookie') || ''; } catch (e) {}
+            log('resp', r.status, 'set-cookie len:', sc.length);
             if (sc) jarMerge(sc);
             return r.text().then(function (text) { return { status: r.status, text: text }; });
         })
@@ -114,9 +116,9 @@ function request(rel, options, onDone, onFail, _retry) {
             if (!_retry && mode === 'direct' && proxyUrl()) { request(rel, options, onDone, onFail, true); return; }
             var hint = '';
             if (mode === 'direct' && !proxyUrl())
-                hint = '. Apple TV/web не могут ходить на rezka напрямую (CORS) — укажите «Прокси (Worker)» в настройках HDREZKA';
+                hint = '. Apple TV/web не могут ходить на rezka напрямую (CORS) — укажите «Прокси (Worker)»';
             else if (mode === 'proxy')
-                hint = '. Worker недоступен или в поле «Прокси» не его адрес (нужен https://…workers.dev/). Запрошено: ' + url;
+                hint = '. Worker недоступен или адрес неверный. Запрошено: ' + url;
             onFail(new Error(e.message + hint));
         });
 }
@@ -127,20 +129,22 @@ function getJson(rel, form, onDone, onFail) {
     request(rel, { method: form ? 'POST' : 'GET', form: form }, function (r) {
         var d = null;
         try { d = JSON.parse(r.text); } catch (e) {}
-        if (d) onDone(d, r); else onFail(new Error('ответ не JSON'), r);
+        if (d) onDone(d, r); else onFail(new Error('ответ не JSON: ' + snippet(r.text, 60)), r);
     }, onFail);
 }
 
 // ==================== REZKA API ====================
 function apiLogin(cb) {
     var email = stGet('email', ''), pass = stGet('password', '');
-    if (!email || !pass) { cb(false, 'укажите email и пароль в настройках HDREZKA'); return; }
+    if (!email || !pass) { cb(false, 'укажите email и пароль (после «Сбросить секреты» — заново)'); return; }
+    log('login: email len', email.length, 'pass len', pass.length);
     request('ajax/login/', {
         method: 'POST',
         form: { login_name: email, login_password: pass, login: 'submit' }
-    }, function () {
-        if (jarHasAuth()) cb(true);
-        else cb(false, 'rezka не выдала куки авторизации (неверный логин/пароль, либо «Прокси» указан неверно — нажмите «Тест соединения»)');
+    }, function (res) {
+        if (jarHasAuth()) { cb(true); return; }
+        cb(false, 'HTTP ' + res.status + ', куки не пришли. Ответ rezka: ' + snippet(res.text, 120) +
+            '. Если видите «ошибка/пароль» — пароль в хранилище протух: «Сбросить секреты» и ввести новый');
     }, function (e) { cb(false, 'ошибка сети: ' + e.message); });
 }
 function ensureAuth(cb) {
@@ -385,8 +389,6 @@ function RezkaMain(object) {
     var scroll = new Lampa.Scroll({ mask: true, over: true });
     var last = false, inited = false;
     function openSearch() {
-        // Только штатный поиск Lampa: у него своя клавиатура (нативная на tvOS)
-        // и в нём уже зарегистрирован наш источник HDREZKA.
         if (Lampa.Search && Lampa.Search.open) {
             Lampa.Search.open({ onBack: function () { Lampa.Controller.toggle('content'); } });
             return;
@@ -440,7 +442,7 @@ function RezkaMain(object) {
         btns.append(bs);
         scroll.append(btns);
         if (!jarHasAuth()) {
-            scroll.append($('<div class="rezka-note">Нет авторизации rezka: Настройки → HDREZKA → «Прокси (Worker)», email, пароль → «Войти на rezka» → «Тест соединения».</div>'));
+            scroll.append($('<div class="rezka-note">Нет авторизации: Настройки → HDREZKA → «Сбросить секреты» → ввести email/пароль → «Войти на rezka».</div>'));
         }
     }
     this.create = function () { inited = true; build(); return this.render(); };
@@ -696,14 +698,6 @@ function registerSearchSource() {
 }
 
 // ==================== НАСТРОЙКИ ====================
-/**
- * Текстовый параметр через штатный type:'input'.
- * ВАЖНО (см. src/interaction/settings/params.js → update()):
- *  - values ДОЛЖЕН быть строкой (''), иначе в строке печатается "undefined";
- *  - placeholder обязателен, иначе атрибут = "undefined" и тоже светится;
- *  - для секретов: data-static (чтобы update() не рисовал значение сам) +
- *    отдельный "_ui" name, чтобы секрет не лежал в открытом ключе Lampa.
- */
 function textParam(name, title, descr, opts) {
     opts = opts || {};
     Lampa.SettingsApi.addParam({
@@ -739,9 +733,8 @@ function registerSettings() {
         name: 'HDREZKA',
         icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 6.5 6 3.5-6 3.5v-7z"/></svg>'
     });
-    // name совпадает с ключом хранилища ('rezka_' + k) — Lampa сама читает/пишет его
     textParam('rezka_proxy', 'Прокси (Worker)',
-        'Адрес вашего Cloudflare Worker, например https://xxx.workers.dev/ (обязателен на Apple TV/web)',
+        'Адрес вашего Cloudflare Worker, например https://xxx.workers.dev/',
         { set: function (v) { stSet('proxy', v); } });
     textParam('rezka_mirror', 'Зеркало rezka',
         'Актуальный домен, например https://rezka.fi',
@@ -749,9 +742,8 @@ function registerSettings() {
     textParam('rezka_email', 'Email / логин rezka',
         'От вашего аккаунта rezka',
         { set: function (v) { stSet('email', v); } });
-    // секреты: отдельный "_ui" name + маска в строке
     textParam('rezka_password_ui', 'Пароль rezka',
-        'Хранится только в локальном хранилище Lampa',
+        'Хранится только локально. Редактор всегда открывается пустым — вводите пароль целиком',
         { mask: true, get: function () { return stGet('password', ''); }, set: function (v) { stSet('password', v); } });
     textParam('rezka_cookies_ui', 'Cookies вручную (необязательно)',
         'Строка cookie из браузера: PHPSESSID=…; dle_user_id=…; dle_password=…',
@@ -762,6 +754,30 @@ function registerSettings() {
         param: { name: 'rezka_transport', type: 'select', values: { auto: 'Авто', proxy: 'Прокси (Worker)', direct: 'Напрямую' }, default: 'auto' },
         field: { name: 'Режим запросов', description: 'Авто = прокси, если адрес worker’а задан' },
         onChange: function (v) { stSet('transport', v); }
+    });
+    Lampa.SettingsApi.addParam({
+        component: 'rezka',
+        param: { name: 'rezka_reset_btn', type: 'button', default: '' },
+        field: { name: 'Сбросить секреты', description: 'Стирает email, пароль и cookies из хранилища (переживает переустановку плагина!)' },
+        onChange: function () {
+            stSet('email', ''); stSet('password', ''); stSet('cookies', '');
+            try { Lampa.Storage.set('rezka_password_ui', ''); Lampa.Storage.set('rezka_cookies_ui', ''); } catch (e) {}
+            Lampa.Noty.show('Секреты сброшены — введите email и пароль заново');
+            try { Lampa.Settings.update(); } catch (e) {}
+        }
+    });
+    Lampa.SettingsApi.addParam({
+        component: 'rezka',
+        param: { name: 'rezka_diag_btn', type: 'button', default: '' },
+        field: { name: 'Диагностика входа', description: 'Показывает, что реально сохранено и каким транспортом пойдёт запрос' },
+        onChange: function () {
+            var email = stGet('email', ''), pass = stGet('password', '');
+            var line = 'email ' + email.length + ' симв. (' + email.slice(0, 3) + '…), пароль ' + pass.length +
+                ' симв., jar ' + jarGet().length + ' симв.' + (jarHasAuth() ? ' (auth есть)' : ' (auth нет)') +
+                ', транспорт ' + transportMode() + (proxyUrl() ? ' → ' + proxyUrl() : '');
+            Lampa.Noty.show(line);
+            log('diag:', line, 'pass tail:', pass.slice(-2));
+        }
     });
     Lampa.SettingsApi.addParam({
         component: 'rezka',
@@ -780,10 +796,12 @@ function registerSettings() {
         param: { name: 'rezka_test_btn', type: 'button', default: '' },
         field: { name: 'Тест соединения', description: 'Запрос главной rezka через текущий транспорт' },
         onChange: function () {
-            Lampa.Noty.show('Rezka: проверка… (' + transportMode() + (transportMode() === 'proxy' ? ': ' + proxyUrl() : '') + ')');
-            getText('', null, function (res) {
-                var okHtml = /b-content__inline|<html/i.test(res.text);
-                Lampa.Noty.show('Rezka: HTTP ' + res.status + (okHtml ? ', HTML похож на rezka' : ', неожиданный ответ') + (jarHasAuth() ? ', авторизация есть' : ', без авторизации'));
+            Lampa.Noty.show('Rezka: проверка… (' + transportMode() + ')');
+            getText('/', null, function (text, res) {
+                var okHtml = /b-content__inline|<html/i.test(text || '');
+                Lampa.Noty.show('Rezka: HTTP ' + (res ? res.status : '?') +
+                    (okHtml ? ', HTML похож на rezka' : ', ответ: ' + snippet(text, 60)) +
+                    (jarHasAuth() ? ', авторизация есть' : ', без авторизации'));
             }, function (e) { Lampa.Noty.show('Rezka: ' + e.message, { style: 'error' }); });
         }
     });
@@ -857,7 +875,7 @@ function init() {
     Lampa.Component.add(COMP_CARD, RezkaCard);
     Lampa.Manifest.plugins = {
         type: 'video',
-        version: '2.4.1',
+        version: '2.4.2',
         name: 'HDREZKA Lab',
         description: 'Фильмы и сериалы с rezka: озвучки, сезоны, серии, история',
         component: COMP_MAIN,
