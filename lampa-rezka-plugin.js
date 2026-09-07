@@ -1,7 +1,8 @@
 /**
- * HDREZKA for Lampa/Luxo (Apple TV, web, Android)
- * v2.0.0 — каталог, поиск, карточка, озвучки, сезоны/серии, плеер, локальная история.
- * Транспорт: прокси (Cloudflare Worker, см. rezka-proxy-worker.js) или direct.
+ * HDREZKA for Lampa/Luxo (Apple TV / web / Android)
+ * v2.3.0 — финальная сборка: каталог, поиск, карточка, озвучки, сезоны/серии,
+ * плеер с плейлистом сезона, локальная история, ввод текста своей клавиатурой-оверлеем.
+ * Транспорт: ваш Cloudflare Worker (резка CORS + HttpOnly cookies) или direct.
  */
 (function () {
     'use strict';
@@ -103,11 +104,7 @@
                 onDone(res);
             })
             .catch(function (e) {
-                // direct упал (CORS/сеть) — один раз пробуем через прокси, если он задан
-                if (!_retry && mode === 'direct' && proxyUrl()) {
-                    request(rel, options, onDone, onFail, true);
-                    return;
-                }
+                if (!_retry && mode === 'direct' && proxyUrl()) { request(rel, options, onDone, onFail, true); return; }
                 onFail(e);
             });
     }
@@ -137,7 +134,7 @@
     function ensureAuth(cb) {
         if (jarHasAuth()) { cb(true); return; }
         if (stGet('email') && stGet('password')) apiLogin(cb);
-        else cb(false, 'Нет авторизации rezka');
+        else cb(false);
     }
     function parseList(html) {
         var doc = new DOMParser().parseFromString(html, 'text/html');
@@ -277,9 +274,7 @@
     }
     function buildSeasonPlaylist(card, baseMeta, episodes, cb) {
         var res = new Array(episodes.length), done = 0;
-        function fin() {
-            cb(res.filter(function (r) { return r && r.url; }));
-        }
+        function fin() { cb(res.filter(function (r) { return r && r.url; })); }
         episodes.forEach(function (ep, i) {
             var meta = {};
             for (var k in baseMeta) meta[k] = baseMeta[k];
@@ -329,6 +324,71 @@
         });
     }
 
+    // ==================== ВВОД ТЕКСТА (оверлей) ====================
+    function openInput(title, current, onDone, returnController) {
+        var value = current || '';
+        var closed = false;
+        var backTo = returnController || 'settings_component';
+        var overlay = $('<div class="rezka-input-overlay">' +
+            '<div class="rezka-input-box">' +
+            '<div class="rezka-input-title">' + esc(title) + '</div>' +
+            '<div class="rezka-input-value"></div>' +
+            '<div class="simple-keyboard"><input type="text" autocomplete="off" class="simple-keyboard-input selector"></div>' +
+            '<div class="rezka-btns">' +
+            '<div class="rezka-btn selector rezka-input-ok">Готово</div>' +
+            '<div class="rezka-btn selector rezka-input-cancel">Отмена</div>' +
+            '</div></div></div>');
+        var input = overlay.find('input');
+        var valueEl = overlay.find('.rezka-input-value');
+
+        function refresh() { valueEl.text(value || '…'); }
+        // Читаем значение НАПРЯМУЮ из поля: нативная клавиатура Apple TV и удалённый
+        // ввод могут вставлять текст без событий keyup/change/input
+        function sync() {
+            var v = input.val();
+            if (typeof v === 'string' && v !== value) { value = v; refresh(); }
+        }
+        function close() { closed = true; clearInterval(poll); overlay.remove(); }
+        function back() { close(); Lampa.Controller.toggle(backTo); }
+        function finish() {
+            sync();
+            var v = value;
+            close();
+            onDone(v);
+            Lampa.Controller.toggle(backTo);
+        }
+
+        input.val(value); refresh();
+        input.on('keyup change input', sync);
+        var poll = setInterval(function () { if (!closed) sync(); }, 300);
+
+        input.on('hover:enter', function () {
+            input.removeAttr('disabled');
+            input.focus();
+            try {
+                if (Lampa.Platform && Lampa.Platform.is('apple_tv')) window.location.assign('lampa://openkeyboard');
+            } catch (e) {}
+        });
+        input.on('keydown', function (e) { if (e.keyCode === 13) finish(); });
+        overlay.find('.rezka-input-ok').on('hover:focus', sync);
+        overlay.find('.rezka-input-ok').on('hover:enter', finish);
+        overlay.find('.rezka-input-cancel').on('hover:enter', back);
+
+        $('body').append(overlay);
+        Lampa.Controller.add('rezka_input', {
+            toggle: function () {
+                Lampa.Controller.collectionSet(overlay);
+                Lampa.Controller.collectionFocus(false, overlay);
+            },
+            up: function () { if (Navigator.canmove('up')) Navigator.move('up'); },
+            down: function () { if (Navigator.canmove('down')) Navigator.move('down'); },
+            left: function () { if (Navigator.canmove('left')) Navigator.move('left'); },
+            right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
+            back: back
+        });
+        Lampa.Controller.toggle('rezka_input');
+    }
+
     // ==================== UI: ОБЩИЕ ЭЛЕМЕНТЫ ====================
     function sectionTitle(t) { return $('<div class="rezka-section">' + esc(t) + '</div>'); }
     function cardEl(item, withProgress) {
@@ -376,84 +436,15 @@
     function RezkaMain(object) {
         var scroll = new Lampa.Scroll({ mask: true, over: true });
         var last = false, inited = false;
-        function openList(sec) {
-            Lampa.Activity.push({ url: '', title: sec.title, component: COMP_LIST, section: sec.path, page: 1 });
-        }
         function openSearch() {
             if (Lampa.Search && Lampa.Search.open) {
-                Lampa.Search.open({
-                    onBack: function () { Lampa.Controller.toggle('content'); }
-                });
+                Lampa.Search.open({ onBack: function () { Lampa.Controller.toggle('content'); } });
                 return;
             }
-     function openInput(title, current, onDone) {
-        var value = current || '';
-        var closed = false;
-        var overlay = $('<div class="rezka-input-overlay">' +
-            '<div class="rezka-input-box">' +
-            '<div class="rezka-input-title">' + esc(title) + '</div>' +
-            '<div class="rezka-input-value"></div>' +
-            '<div class="simple-keyboard"><input type="text" autocomplete="off" class="simple-keyboard-input selector"></div>' +
-            '<div class="rezka-btns">' +
-            '<div class="rezka-btn selector rezka-input-ok">Готово</div>' +
-            '<div class="rezka-btn selector rezka-input-cancel">Отмена</div>' +
-            '</div></div></div>');
-        var input = overlay.find('input');
-        var valueEl = overlay.find('.rezka-input-value');
-
-        function refresh() { valueEl.text(value || '…'); }
-        // Читает значение НАПРЯМУЮ из поля: нативная клавиатура Apple TV и
-        // удалённый ввод могут вставлять текст без событий keyup/change/input
-        function sync() {
-            var v = input.val();
-            if (typeof v === 'string' && v !== value) { value = v; refresh(); }
+            openInput('Поиск на rezka', '', function (text) {
+                if (text) Lampa.Activity.push({ url: '', title: 'Rezka: ' + text, component: COMP_LIST, search: text, page: 1 });
+            }, 'content');
         }
-        function close() {
-            closed = true;
-            clearInterval(poll);
-            overlay.remove();
-        }
-        function back() { close(); Lampa.Controller.toggle('settings_component'); }
-        function finish() {
-            sync();
-            var v = value;
-            close();
-            onDone(v);
-            Lampa.Controller.toggle('settings_component');
-        }
-
-        input.val(value); refresh();
-        input.on('keyup change input', sync);
-
-        // Страховка: опрашиваем поле, пока оверлей открыт
-        var poll = setInterval(function () { if (!closed) sync(); }, 300);
-
-        input.on('hover:enter', function () {
-            input.removeAttr('disabled');
-            input.focus();
-            try {
-                if (Lampa.Platform && Lampa.Platform.is('apple_tv')) window.location.assign('lampa://openkeyboard');
-            } catch (e) {}
-        });
-        input.on('keydown', function (e) { if (e.keyCode === 13) finish(); });
-        overlay.find('.rezka-input-ok').on('hover:focus', sync);
-        overlay.find('.rezka-input-ok').on('hover:enter', finish);
-        overlay.find('.rezka-input-cancel').on('hover:enter', back);
-
-        $('body').append(overlay);
-        Lampa.Controller.add('rezka_input', {
-            toggle: function () {
-                Lampa.Controller.collectionSet(overlay);
-                Lampa.Controller.collectionFocus(false, overlay);
-            },
-            up: function () { if (Navigator.canmove('up')) Navigator.move('up'); },
-            down: function () { if (Navigator.canmove('down')) Navigator.move('down'); },
-            left: function () { if (Navigator.canmove('left')) Navigator.move('left'); },
-            right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
-            back: back
-        });
-        Lampa.Controller.toggle('rezka_input');
-    }
         function build() {
             scroll.clear();
             var hist = histGet();
@@ -490,7 +481,9 @@
             SECTIONS.forEach(function (sec) {
                 var b = btnEl(sec.title);
                 b.on('hover:focus', function () { last = b; });
-                b.on('hover:enter', function () { openList(sec); });
+                b.on('hover:enter', function () {
+                    Lampa.Activity.push({ url: '', title: sec.title, component: COMP_LIST, section: sec.path, page: 1 });
+                });
                 btns.append(b);
             });
             var bs = btnEl('Поиск');
@@ -499,7 +492,7 @@
             btns.append(bs);
             scroll.append(btns);
             if (!jarHasAuth()) {
-                scroll.append($('<div class="rezka-note">Нет авторизации rezka: Настройки → HDREZKA → указать прокси, email и пароль, нажать «Войти».</div>'));
+                scroll.append($('<div class="rezka-note">Нет авторизации rezka: Настройки → HDREZKA → указать прокси, email и пароль, нажать «Войти на rezka».</div>'));
             }
         }
         this.create = function () { inited = true; build(); return this.render(); };
@@ -509,7 +502,7 @@
         makeController(this, scroll, function () { return last; });
     }
 
-    // ==================== ЭКРАН: СПИСОК (каталог/поиск) ====================
+    // ==================== ЭКРАН: СПИСОК ====================
     function RezkaList(object) {
         var scroll = new Lampa.Scroll({ mask: true, over: true });
         var last = false, page = object.page || 1, inited = false;
@@ -572,10 +565,10 @@
         }
         function curVoice() { return card && card.translators.length ? card.translators[voiceIdx] : { id: '', title: '' }; }
         function loadEpisodes(cb) {
-            if (!card.isSerial) { episodes = []; cb && cb(); return; }
+            if (!card.isSerial) { episodes = []; if (cb) cb(); return; }
             var sid = seasonId || (card.seasons.length ? card.seasons[0].id : '1');
             seasonId = sid;
-            apiEpisodes(card.contentId, sid, function (eps) { episodes = eps; cb && cb(); }, function () { episodes = []; cb && cb(); });
+            apiEpisodes(card.contentId, sid, function (eps) { episodes = eps; if (cb) cb(); }, function () { episodes = []; if (cb) cb(); });
         }
         function baseMeta() {
             var v = curVoice();
@@ -586,13 +579,11 @@
                 season: card.isSerial ? seasonId : '', episode: ''
             };
         }
-        function playEpisode(ep, resumeTime) {
+        function playEpisode(ep) {
             var meta = baseMeta();
             meta.episode = ep.id;
             meta.hash = hashFor(meta);
-            buildSeasonPlaylist(card, meta, episodes, function (playlist) {
-                playMeta(meta, playlist);
-            });
+            buildSeasonPlaylist(card, meta, episodes, function (playlist) { playMeta(meta, playlist); });
         }
         function playMovie() { playMeta(baseMeta(), null); }
 
@@ -600,11 +591,10 @@
             scroll.clear();
             if (!card) { scroll.append(sectionTitle('Загрузка…')); return; }
             try { if (Lampa.Background && Lampa.Background.change) Lampa.Background.change(card.poster); } catch (e) {}
-            var head = $('<div class="rezka-head">' +
+            scroll.append($('<div class="rezka-head">' +
                 '<div class="rezka-head__poster">' + (card.poster ? '<img src="' + esc(card.poster) + '">' : '') + '</div>' +
                 '<div class="rezka-head__info"><div class="rezka-head__title">' + esc(card.title) + '</div>' +
-                '<div class="rezka-head__descr">' + esc(card.descr) + '</div></div></div>');
-            scroll.append(head);
+                '<div class="rezka-head__descr">' + esc(card.descr) + '</div></div></div>'));
 
             var btns = $('<div class="rezka-btns"></div>');
             var hist = histGet().filter(function (h) { return h.url === card.rel; })[0];
@@ -612,18 +602,16 @@
             bPlay.on('hover:focus', function () { last = bPlay; });
             bPlay.on('hover:enter', function () {
                 ensureAuth(function (ok) {
-                    if (!ok) Lampa.Noty.show('Rezka: нет авторизации — смотрите настройки плагина', { style: 'error' });
-                    if (card.isSerial) {
-                        if (hist) {
-                            seasonId = String(hist.season || '');
-                            loadEpisodes(function () {
-                                var ep = null;
-                                for (var i = 0; i < episodes.length; i++) if (String(episodes[i].id) === String(hist.episode)) ep = episodes[i];
-                                playEpisode(ep || episodes[0]);
-                            });
-                        } else if (episodes.length) playEpisode(episodes[0]);
-                        else loadEpisodes(function () { if (episodes.length) playEpisode(episodes[0]); });
-                    } else playMovie();
+                    if (!ok) { Lampa.Noty.show('Rezka: нет авторизации — Настройки → HDREZKA', { style: 'error' }); return; }
+                    if (!card.isSerial) { playMovie(); return; }
+                    var target = object.resume || hist;
+                    if (target && target.season && String(target.season) !== String(seasonId || '')) seasonId = String(target.season);
+                    loadEpisodes(function () {
+                        var ep = null;
+                        if (target) for (var i = 0; i < episodes.length; i++) if (String(episodes[i].id) === String(target.episode)) ep = episodes[i];
+                        if (!ep) ep = episodes[0];
+                        if (ep) playEpisode(ep); else Lampa.Noty.show('Rezka: нет серий');
+                    });
                 });
             });
             btns.append(bPlay);
@@ -677,18 +665,14 @@
                         '<div class="rezka-ep__bar"><div style="width:' + p + '%"></div></div>' +
                         '<div class="rezka-ep__pct">' + (p ? Math.round(p) + '%' : '') + '</div></div>');
                     row.on('hover:focus', function () { last = row; });
-                    row.on('hover:enter', function () {
-                        ensureAuth(function () { playEpisode(ep); });
-                    });
+                    row.on('hover:enter', function () { ensureAuth(function () { playEpisode(ep); }); });
                     row.on('hover:long', function () {
                         Lampa.Select.show({
                             title: ep.title,
                             items: [{ title: p >= 90 ? 'Отметить как непросмотренную' : 'Отметить как просмотренную' }],
                             onSelect: function () {
                                 Lampa.Select.close();
-                                try {
-                                    Lampa.Timeline.update({ hash: hashFor(meta), percent: p >= 90 ? 0 : 100, time: 0, duration: 0 });
-                                } catch (e) {}
+                                try { Lampa.Timeline.update({ hash: hashFor(meta), percent: p >= 90 ? 0 : 100, time: 0, duration: 0 }); } catch (e) {}
                                 render();
                                 Lampa.Controller.toggle('content');
                             },
@@ -732,7 +716,123 @@
         makeController(this, scroll, function () { return last; });
     }
 
-    // ==================== РЕГИСТРАЦИЯ ====================
+    // ==================== ПОИСК: ИСТОЧНИК В ЯДРЕ ====================
+    function registerSearchSource() {
+        if (!Lampa.Search || !Lampa.Search.addSource) return;
+        Lampa.Search.addSource({
+            title: 'HDREZKA',
+            search: function (params, oncomplite) {
+                var query = (params && params.query) || '';
+                if (query.length < 3) { oncomplite([]); return; }
+                getText('search/?do=search&subaction=search&story=' + encodeURIComponent(query), null, function (html) {
+                    var cards = parseList(html).slice(0, 20).map(function (it) {
+                        return {
+                            id: 'rezka_' + Lampa.Utils.hash(it.url),
+                            title: it.title,
+                            original_title: it.title,
+                            release_date: it.year || '0000',
+                            overview: '',
+                            img: it.poster,
+                            rezka_url: it.url,
+                            rezka_type: it.type,
+                            source: 'rezka'
+                        };
+                    });
+                    oncomplite(cards.length ? [{ title: 'HDREZKA', results: cards }] : []);
+                }, function () { oncomplite([]); });
+            },
+            onCancel: function () {},
+            onMore: function (params, close) { close(); },
+            onSelect: function (params, close) {
+                close();
+                var el = params.element || {};
+                Lampa.Activity.push({ url: '', title: el.title || 'Rezka', component: COMP_CARD, card_url: el.rezka_url, page: 1 });
+            }
+        });
+    }
+
+    // ==================== НАСТРОЙКИ ====================
+    function textParam(name, title, descr, getVal, setVal) {
+        Lampa.SettingsApi.addParam({
+            component: 'rezka',
+            param: { name: name, type: 'button', default: '' },
+            field: { name: title, description: descr },
+            onRender: function (item) {
+                var v = getVal();
+                item.find('.settings-param__name').text(title + (v ? ': ' + v : ' —'));
+            },
+            onChange: function () {
+                openInput(title, getVal(), function (text) {
+                    setVal(text);
+                    Lampa.Noty.show('Сохранено: ' + title);
+                    try { Lampa.Settings.update(); } catch (e) {}
+                });
+            }
+        });
+    }
+    function registerSettings() {
+        Lampa.SettingsApi.addComponent({
+            component: 'rezka',
+            name: 'HDREZKA',
+            icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 6.5 6 3.5-6 3.5v-7z"/></svg>'
+        });
+        textParam('rezka_proxy_btn', 'Прокси (Worker)',
+            'Адрес вашего Cloudflare Worker, обязателен на Apple TV/web',
+            function () { return stGet('proxy', ''); },
+            function (v) { stSet('proxy', v); });
+        textParam('rezka_mirror_btn', 'Зеркало rezka',
+            'Актуальный домен, например https://rezka.fi',
+            function () { return stGet('mirror', 'https://rezka.fi'); },
+            function (v) { stSet('mirror', v || 'https://rezka.fi'); });
+        textParam('rezka_email_btn', 'Email / логин rezka',
+            'От вашего аккаунта rezka',
+            function () { return stGet('email', ''); },
+            function (v) { stSet('email', v); });
+        textParam('rezka_password_btn', 'Пароль rezka',
+            'Хранится только в локальном хранилище Lampa',
+            function () { return stGet('password', '') ? '••••••' : ''; },
+            function (v) { stSet('password', v); });
+        textParam('rezka_cookies_btn', 'Cookies вручную (необязательно)',
+            'Строка cookie из браузера, включая PHPSESSID',
+            function () { return stGet('cookies', '') ? '••••••' : ''; },
+            function (v) { stSet('cookies', v); });
+        Lampa.SettingsApi.addParam({
+            component: 'rezka',
+            param: {
+                name: 'rezka_transport', type: 'select',
+                values: { auto: 'Авто', proxy: 'Прокси (Worker)', direct: 'Напрямую' },
+                default: 'auto'
+            },
+            field: { name: 'Режим запросов', description: 'Авто = прокси, если адрес задан' },
+            onChange: function (v) { stSet('transport', v); }
+        });
+        Lampa.SettingsApi.addParam({
+            component: 'rezka',
+            param: { name: 'rezka_login_btn', type: 'button', default: '' },
+            field: { name: 'Войти на rezka', description: 'Отправляет логин/пароль и сохраняет cookies' },
+            onChange: function () {
+                Lampa.Noty.show('Rezka: вход…');
+                apiLogin(function (ok, err) {
+                    Lampa.Noty.show(ok ? 'Rezka: вход выполнен' : ('Rezka: ' + err), ok ? {} : { style: 'error' });
+                    try { Lampa.Settings.update(); } catch (e) {}
+                });
+            }
+        });
+        Lampa.SettingsApi.addParam({
+            component: 'rezka',
+            param: { name: 'rezka_sync', type: 'trigger', default: false },
+            field: { name: 'Синхронизация истории с rezka', description: 'Экспериментально: ajax/send_watching' },
+            onChange: function (v) { stSet('sync', v ? 'true' : ''); }
+        });
+        Lampa.SettingsApi.addParam({
+            component: 'rezka',
+            param: { name: 'rezka_clear_hist', type: 'button', default: '' },
+            field: { name: 'Очистить историю плагина' },
+            onChange: function () { stSet('history', []); Lampa.Noty.show('История Rezka очищена'); }
+        });
+    }
+
+    // ==================== СТИЛИ / МЕНЮ / СТАРТ ====================
     function addCss() {
         Lampa.Template.add('rezka_css', '<style>' +
             '.rezka-section{font-size:1.3em;color:#9a9a9a;margin:1.2em 0 .8em}' +
@@ -780,173 +880,6 @@
         });
         $('.menu .menu__list').eq(0).append(btn);
     }
-    function openInput(title, current, onDone) {
-        var value = current || '';
-        var overlay = $('<div class="rezka-input-overlay">' +
-            '<div class="rezka-input-box">' +
-            '<div class="rezka-input-title">' + esc(title) + '</div>' +
-            '<div class="rezka-input-value"></div>' +
-            '<div class="simple-keyboard"><input type="text" autocomplete="off" class="simple-keyboard-input selector"></div>' +
-            '<div class="rezka-btns">' +
-            '<div class="rezka-btn selector rezka-input-ok">Готово</div>' +
-            '<div class="rezka-btn selector rezka-input-cancel">Отмена</div>' +
-            '</div></div></div>');
-        var input = overlay.find('input');
-        var valueEl = overlay.find('.rezka-input-value');
-        function refresh() { valueEl.text(value || '…'); }
-        function close() { overlay.remove(); }
-        function back() { close(); Lampa.Controller.toggle('settings_component'); }
-        function finish() { close(); onDone(value); Lampa.Controller.toggle('settings_component'); }
-        input.val(value); refresh();
-        input.on('keyup change input', function () { value = input.val(); refresh(); });
-        input.on('hover:enter', function () {
-            input.removeAttr('disabled');
-            input.focus();
-            try {
-                // штатный способ ядра Lampa вызвать нативную клавиатуру на Apple TV
-                if (Lampa.Platform && Lampa.Platform.is('apple_tv')) window.location.assign('lampa://openkeyboard');
-            } catch (e) {}
-        });
-        input.on('keydown', function (e) { if (e.keyCode === 13) finish(); });
-        overlay.find('.rezka-input-ok').on('hover:enter', finish);
-        overlay.find('.rezka-input-cancel').on('hover:enter', back);
-        $('body').append(overlay);
-        Lampa.Controller.add('rezka_input', {
-            toggle: function () {
-                Lampa.Controller.collectionSet(overlay);
-                Lampa.Controller.collectionFocus(false, overlay);
-            },
-            up: function () { if (Navigator.canmove('up')) Navigator.move('up'); },
-            down: function () { if (Navigator.canmove('down')) Navigator.move('down'); },
-            left: function () { if (Navigator.canmove('left')) Navigator.move('left'); },
-            right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
-            back: back
-        });
-        Lampa.Controller.toggle('rezka_input');
-    }
-
-    function textParam(name, title, descr, getVal, setVal) {
-        Lampa.SettingsApi.addParam({
-            component: 'rezka',
-            param: { name: name, type: 'button', default: '' },
-            field: { name: title, description: descr },
-            onRender: function (item) {
-                var v = getVal();
-                item.find('.settings-param__name').text(title + (v ? ': ' + v : ' —'));
-            },
-            onChange: function () {
-                openInput(title, getVal(), function (text) {
-                    setVal(text);
-                    Lampa.Noty.show('Сохранено: ' + title);
-                    try { Lampa.Settings.update(); } catch (e) {}
-                });
-            }
-        });
-    }
-
-        function registerSearchSource() {
-        if (!Lampa.Search || !Lampa.Search.addSource) return;
-        Lampa.Search.addSource({
-            title: 'HDREZKA',
-            search: function (params, oncomplite) {
-                var query = (params && params.query) || '';
-                if (query.length < 3) { oncomplite([]); return; }
-                getText('search/?do=search&subaction=search&story=' + encodeURIComponent(query), null, function (html) {
-                    var cards = parseList(html).slice(0, 20).map(function (it) {
-                        return {
-                            id: 'rezka_' + Lampa.Utils.hash(it.url),
-                            title: it.title,
-                            original_title: it.title,
-                            release_date: it.year || '0000',
-                            overview: '',
-                            img: it.poster,
-                            rezka_url: it.url,
-                            rezka_type: it.type,
-                            source: 'rezka'
-                        };
-                    });
-                    oncomplite(cards.length ? [{ title: 'HDREZKA', results: cards }] : []);
-                }, function () { oncomplite([]); });
-            },
-            onCancel: function () {},
-            onMore: function (params, close) { close(); },
-            onSelect: function (params, close) {
-                close();
-                var el = params.element || {};
-                Lampa.Activity.push({ url: '', title: el.title || 'Rezka', component: COMP_CARD, card_url: el.rezka_url, page: 1 });
-            }
-        });
-    }
-    
-    function registerSettings() {
-        Lampa.SettingsApi.addComponent({
-            component: 'rezka',
-            name: 'HDREZKA',
-            icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 6.5 6 3.5-6 3.5v-7z"/></svg>'
-        });
-
-        textParam('rezka_proxy_btn', 'Прокси (Worker)',
-            'Адрес вашего Cloudflare Worker, обязателен на Apple TV/web',
-            function () { return stGet('proxy', ''); },
-            function (v) { stSet('proxy', v); });
-
-        textParam('rezka_mirror_btn', 'Зеркало rezka',
-            'Актуальный домен, например https://rezka.fi',
-            function () { return stGet('mirror', 'https://rezka.fi'); },
-            function (v) { stSet('mirror', v || 'https://rezka.fi'); });
-
-        textParam('rezka_email_btn', 'Email / логин rezka',
-            'От вашего аккаунта rezka',
-            function () { return stGet('email', ''); },
-            function (v) { stSet('email', v); });
-
-        textParam('rezka_password_btn', 'Пароль rezka',
-            'Хранится только в локальном хранилище Lampa',
-            function () { return stGet('password', '') ? '••••••' : ''; },
-            function (v) { stSet('password', v); });
-
-        textParam('rezka_cookies_btn', 'Cookies вручную (необязательно)',
-            'Строка cookie из браузера, включая PHPSESSID',
-            function () { return stGet('cookies', '') ? '••••••' : ''; },
-            function (v) { stSet('cookies', v); });
-
-        Lampa.SettingsApi.addParam({
-            component: 'rezka',
-            param: {
-                name: 'rezka_transport', type: 'select',
-                values: { auto: 'Авто', proxy: 'Прокси (Worker)', direct: 'Напрямую' },
-                default: 'auto'
-            },
-            field: { name: 'Режим запросов', description: 'Авто = прокси, если адрес задан' },
-            onChange: function (v) { stSet('transport', v); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: 'rezka',
-            param: { name: 'rezka_login_btn', type: 'button', default: '' },
-            field: { name: 'Войти на rezka', description: 'Отправляет логин/пароль и сохраняет cookies' },
-            onChange: function () {
-                Lampa.Noty.show('Rezka: вход…');
-                apiLogin(function (ok, err) {
-                    Lampa.Noty.show(ok ? 'Rezka: вход выполнен' : ('Rezka: ' + err), ok ? {} : { style: 'error' });
-                });
-            }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: 'rezka',
-            param: { name: 'rezka_sync', type: 'trigger', default: false },
-            field: { name: 'Синхронизация истории с rezka', description: 'Экспериментально: ajax/send_watching' },
-            onChange: function (v) { stSet('sync', v ? 'true' : ''); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: 'rezka',
-            param: { name: 'rezka_clear_hist', type: 'button', default: '' },
-            field: { name: 'Очистить историю плагина' },
-            onChange: function () { stSet('history', []); Lampa.Noty.show('История Rezka очищена'); }
-        });
-    }
     function init() {
         addCss();
         Lampa.Component.add(COMP_MAIN, RezkaMain);
@@ -954,7 +887,7 @@
         Lampa.Component.add(COMP_CARD, RezkaCard);
         Lampa.Manifest.plugins = {
             type: 'video',
-            version: '2.0.0',
+            version: '2.3.0',
             name: 'HDREZKA Lab',
             description: 'Фильмы и сериалы с rezka: озвучки, сезоны, серии, история',
             component: COMP_MAIN,
