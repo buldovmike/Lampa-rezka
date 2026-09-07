@@ -134,17 +134,21 @@ function getJson(rel, form, onDone, onFail) {
 }
 
 // ==================== REZKA API ====================
+function htmlTitle(t) { var m = /<title[^>]*>([^<]{0,80})/i.exec(t || ''); return m ? m[1].trim() : ''; }
 function apiLogin(cb) {
     var email = stGet('email', ''), pass = stGet('password', '');
-    if (!email || !pass) { cb(false, 'укажите email и пароль (после «Сбросить секреты» — заново)'); return; }
-    log('login: email len', email.length, 'pass len', pass.length);
+    if (!email || !pass) { cb(false, 'укажите email и пароль'); return; }
     request('ajax/login/', {
         method: 'POST',
         form: { login_name: email, login_password: pass, login: 'submit' }
     }, function (res) {
         if (jarHasAuth()) { cb(true); return; }
-        cb(false, 'HTTP ' + res.status + ', куки не пришли. Ответ rezka: ' + snippet(res.text, 120) +
-            '. Если видите «ошибка/пароль» — пароль в хранилище протух: «Сбросить секреты» и ввести новый');
+        var isHtml = /<html|<!doctype/i.test(res.text || '');
+        var extra = isHtml
+            ? 'rezka вернула СТРАНИЦУ вместо ajax (title: «' + (htmlTitle(res.text) || '—') +
+              '»). Это защита аккаунта/капча после алерта либо 302-цепочка. Рабочий обход: вставьте готовые cookies браузера в «Cookies вручную»'
+            : 'ответ: ' + snippet(res.text, 120);
+        cb(false, 'HTTP ' + res.status + ', куки не пришли. ' + extra);
     }, function (e) { cb(false, 'ошибка сети: ' + e.message); });
 }
 function ensureAuth(cb) {
@@ -789,6 +793,25 @@ function registerSettings() {
                 Lampa.Noty.show(ok ? 'Rezka: вход выполнен' : ('Rezka: ' + err), ok ? {} : { style: 'error' });
                 try { Lampa.Settings.update(); } catch (e) {}
             });
+        }
+    });
+    Lampa.SettingsApi.addParam({
+    component: 'rezka',
+    param: { name: 'rezka_dbg_btn', type: 'button', default: '' },
+    field: { name: 'Отладка логина (через worker)', description: 'Показывает статус, редиректы, куки и title ответа rezka' },
+    onChange: function () {
+        if (transportMode() !== 'proxy') { Lampa.Noty.show('Отладка доступна в режиме прокси'); return; }
+        var url = proxyUrl() + '?r=' + encodeURIComponent('ajax/login/') + '&m=' + encodeURIComponent(mirror()) + '&dbg=1';
+        Lampa.Noty.show('Rezka: отладочный запрос…');
+        fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Rezka-Cookie': jarGet() },
+            body: encodeForm({ login_name: stGet('email', ''), login_password: stGet('password', ''), login: 'submit' })
+        }).then(function (r) { return r.json(); }).then(function (d) {
+            Lampa.Noty.show('DBG: HTTP ' + d.status + ', редиректов ' + (d.hops || []).length +
+                ', куки ' + (d.setCookies || []).length + ', title: ' + (d.title || '—'));
+            log('dbg:', JSON.stringify(d).slice(0, 500));
+        }).catch(function (e) { Lampa.Noty.show('DBG: ' + e.message, { style: 'error' }); });
         }
     });
     Lampa.SettingsApi.addParam({
