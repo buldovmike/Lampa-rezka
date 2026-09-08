@@ -1,8 +1,11 @@
 /**
-HDREZKA for Lampa/Luxo — v4.1.0
-v4 + horizontal feed rows with right-scroll pagination (onEnd + page button),
-+ poster enrichment for /continue/ items (quick title search),
-mirror cascade + instant meta + scroll fixes kept. Worker: v9.
+HDREZKA for Lampa/Luxo — v5.0.0
+FIX: cookie-scope split (content routes ANONYMOUS + mirror cascade ag->hdrezka->fi;
+auth routes with jar on primary mirror) — auth cookies from foreign IP cause 301-roulette;
+FIX: no Controller.collectionSet after async appends (focus was dying ~1s after hover);
+horizontal rows with right-scroll pagination kept; bigger cards; description line;
+built-in probe matrix (Settings -> Диагностика) prints anon/auth x mirror x card/ajax.
+Worker: v9 (unchanged).
 */
 (function () {
 'use strict';
@@ -25,15 +28,14 @@ if (m.slice(-1) !== '/') m += '/';
 return m;
 }
 function mirrorsList() {
-var def = 'https://rezka.fi,https://rezka.ag,https://hdrezka.ag';
+var def = 'https://rezka.ag,https://hdrezka.ag,https://rezka.fi';
 var raw = stGet('mirrors', def) || def;
 var arr = String(raw).split(/[\s,;]+/).filter(function (x) { return x; }).map(function (x) {
 if (!/^https?:\/\//i.test(x)) x = 'https://' + x;
 if (x.slice(-1) !== '/') x += '/';
 return x;
 });
-var prim = mirror();
-if (arr.indexOf(prim) < 0) arr.unshift(prim);
+if (!arr.length) arr.push(mirror());
 return arr;
 }
 function mirrorsOrdered(preferred) {
@@ -45,6 +47,7 @@ if (i > 0) { list.splice(i, 1); list.unshift(preferred); }
 return list;
 }
 function hostOf(m) { try { return new URL(m).host; } catch (e) { return m; } }
+function contentAuth() { return stGet('auth_cards', '') === 'true'; }
 function proxyUrl() {
 var p = (stGet('proxy', '') || '').trim().replace(/\s+/g, '');
 if (!p) return '';
@@ -109,7 +112,7 @@ function acceptCard(html) {
 return !isBadHtml(html) && /id="post_id"|translators-list|data-translator_id|b-post__|simple-seasons/i.test(html);
 }
 
-// ==================== COOKIE-JAR ====================
+// ==================== COOKIE-JAR (только для auth-маршрутов) ====================
 function jarGet() { return stGet('cookies', '') || ''; }
 function jarMerge(str) {
 if (!str) return;
@@ -130,17 +133,18 @@ stSet('cookies', out.join('; '));
 }
 function jarHasAuth() { return /dle_user_id=|dle_password=|dle_user_token=|user_hash=/.test(jarGet()); }
 
-// ==================== ТРАНСПОРТ ====================
+// ==================== ТРАНСПОРТ (cookie-scope) ====================
 function request(rel, options, onDone, onFail, _retry) {
 options = options || {};
 var method = options.method || 'GET';
 var body = options.form ? encodeForm(options.form) : null;
 var mode = transportMode();
 var base = options.mirror || mirror();
+var authed = options.auth === true;
 var url, headers = {};
 if (mode === 'proxy') {
 url = proxyUrl() + '?r=' + encodeURIComponent(rel) + '&m=' + encodeURIComponent(base);
-headers['X-Rezka-Cookie'] = jarGet();
+if (authed) headers['X-Rezka-Cookie'] = jarGet();
 if (options.referer) headers['X-Rezka-Referer'] = options.referer;
 if (body) headers['Content-Type'] = 'application/x-www-form-urlencoded';
 } else {
@@ -151,18 +155,17 @@ if (body) headers['Content-Type'] = 'application/x-www-form-urlencoded';
 if (options.ajax) headers['X-Requested-With'] = 'XMLHttpRequest';
 fetch(url, {
 method: method, headers: headers, body: body,
-credentials: mode === 'proxy' ? 'omit' : 'include'
+credentials: (mode === 'direct' && authed) ? 'include' : 'omit'
 })
 .then(function (r) {
+if (authed) {
 var sc = '';
 try { sc = r.headers.get('x-rezka-set-cookie') || ''; } catch (e) {}
 if (sc) jarMerge(sc);
+}
 return r.text().then(function (text) { return { status: r.status, text: text }; });
 })
-.then(function (res) {
-if (mode === 'direct') { try { jarMerge(document.cookie); } catch (e) {} }
-onDone(res);
-})
+.then(function (res) { onDone(res); })
 .catch(function (e) {
 if (!_retry && mode === 'direct' && proxyUrl()) { request(rel, options, onDone, onFail, true); return; }
 var hint = '';
@@ -174,10 +177,10 @@ onFail(new Error(e.message + hint));
 });
 }
 function getText(rel, opts, onDone, onFail) {
-request(rel, opts || { method: 'GET' }, function (r) { onDone(r.text, r); }, onFail);
+request(rel, opts || { method: 'GET', auth: false }, function (r) { onDone(r.text, r); }, onFail);
 }
-function getJson(rel, form, referer, onDone, onFail, mirrorHost) {
-request(rel, { method: form ? 'POST' : 'GET', form: form, referer: referer, ajax: true, mirror: mirrorHost }, function (r) {
+function getJson(rel, form, referer, onDone, onFail, mirrorHost, authed) {
+request(rel, { method: form ? 'POST' : 'GET', form: form, referer: referer, ajax: true, mirror: mirrorHost, auth: !!authed }, function (r) {
 var d = null;
 try { d = JSON.parse(r.text); } catch (e) {}
 if (d) onDone(d, r); else onFail(new Error('ответ не JSON: ' + snippet(r.text, 60)), r);
@@ -188,7 +191,7 @@ var list = mirrorsOrdered(''), i = 0, errs = [];
 function next() {
 if (i >= list.length) { fail(new Error(errs.join(' | ') || 'все зеркала отказали')); return; }
 var m = list[i++];
-getText(rel, { method: 'GET', mirror: m }, function (html) {
+getText(rel, { method: 'GET', mirror: m, auth: contentAuth() }, function (html) {
 if (accept(html)) cb(html, m);
 else { errs.push(hostOf(m) + ': ' + (isBadHtml(html) ? snippet(html, 30) || 'заглушка/301' : 'нет маркеров карточки')); next(); }
 }, function (e) { errs.push(hostOf(m) + ': ' + (e && e.message || 'сеть')); next(); });
@@ -201,7 +204,7 @@ function next() {
 if (i >= list.length) { onFail(new Error(errs.join(' | ') || 'ajax недоступен на всех зеркалах')); return; }
 var m = list[i++];
 var ref = refererBase ? (m + refererBase.replace(/^\//, '')) : undefined;
-getJson(rel, form, ref, onDone, function (e) { errs.push(hostOf(m) + ': ' + (e && e.message || '')); next(); }, m);
+getJson(rel, form, ref, onDone, function (e) { errs.push(hostOf(m) + ': ' + (e && e.message || '')); next(); }, m, contentAuth());
 }
 next();
 }
@@ -386,14 +389,15 @@ return eps;
 function apiLogin(cb) {
 var email = stGet('email', ''), pass = stGet('password', '');
 if (!email || !pass) { cb(false, 'укажите email и пароль'); return; }
-var list = mirrorsOrdered(''), i = 0, errs = [];
+var list = [mirror()].concat(mirrorsList()), i = 0, errs = [], seenM = {};
 function next() {
+while (i < list.length && seenM[list[i]]) i++;
 if (i >= list.length) { cb(false, errs.join(' | ') || 'вход не выполнен'); return; }
-var m = list[i++];
+var m = list[i++]; seenM[m] = 1;
 request(ajaxRel('ajax/login/'), {
 method: 'POST',
 form: { login_name: email, login_password: pass, login: 'submit' },
-ajax: true, mirror: m
+ajax: true, mirror: m, auth: true
 }, function (res) {
 if (jarHasAuth()) { cb(true, m); return; }
 errs.push(hostOf(m) + ': ' + snippet(res.text, 60));
@@ -474,7 +478,6 @@ while ((m = re.exec(encoded)) !== null) tryPart(m[0]);
 return urls;
 }
 function buildQuality(url) {
-// 2026: rezka отдаёт прямой CORS-HLS manifest (voidslam.org -> 302 -> emerald.*)
 if (/^https?:/.test(url) && /\.m3u8(?=$|\?)/.test(url)) return { 'AUTO': url };
 if (/^https?:/.test(url)) return { '1080p': url };
 var list = decodeRezkaUrl(url), map = {};
@@ -508,6 +511,46 @@ fail(e);
 });
 }
 
+// ==================== ДИАГНОСТИКА (матрица anon/auth x зеркала x card/ajax) ====================
+function probeDbg(m, authed, rel) {
+return fetch(proxyUrl() + '?r=' + encodeURIComponent(rel) + '&m=' + encodeURIComponent(m) + '&dbg=1', {
+headers: authed ? { 'X-Rezka-Cookie': jarGet() } : {}
+}).then(function (r) { return r.json(); }).then(function (d) {
+return hostOf(m) + ' ' + (authed ? 'auth' : 'anon') + ': HTTP ' + d.status +
+(d.loop ? ' LOOP' : '') + (d.title ? ' «' + snippet(d.title, 18) + '»' : '');
+}).catch(function (e) { return hostOf(m) + ' ' + (authed ? 'auth' : 'anon') + ': ERR ' + e.message; });
+}
+function probeAjax(m, rel, id) {
+return new Promise(function (res) {
+getJson(ajaxRel('ajax/get_cdn_series/'), { id: id, translator_id: '', action: 'get_episodes' },
+m + rel.replace(/^\//, ''),
+function (d) { res(hostOf(m) + ' ajax anon: ' + ((d && (d.episodes || d.seasons)) ? 'OK' : 'пусто')); },
+function (e) { res(hostOf(m) + ' ajax anon: FAIL ' + snippet(e.message, 40)); }, m, false);
+});
+}
+function runDiag() {
+if (transportMode() !== 'proxy') { Lampa.Noty.show('Диагностика доступна только через Worker', { style: 'error' }); return; }
+var rel = stGet('diag_rel', '') || 'films/drama/33787-doch-2017.html';
+var idm = rel.match(/\/(\d+)-/);
+var ms = mirrorsList().slice(0, 2);
+var jobs = [];
+ms.forEach(function (m) {
+jobs.push(probeDbg(m, false, rel));
+jobs.push(probeDbg(m, true, rel));
+if (idm) jobs.push(probeAjax(m, rel, idm[1]));
+});
+jobs.push(probeDbg(mirror(), true, 'continue/'));
+Lampa.Noty.show('Rezka: зондирование…');
+Promise.all(jobs).then(function (lines) {
+Lampa.Select.show({
+title: 'Диагностика rezka (anon/auth)',
+items: lines.map(function (l) { return { title: l }; }),
+onSelect: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); },
+onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); }
+});
+});
+}
+
 // ==================== ПОДБОР КАРТОЧКИ ====================
 function scoreOf(item, titles, year) {
 var t = norm(item.title), best = 0;
@@ -533,7 +576,7 @@ var qi = 0;
 function next() {
 if (qi >= titles.length) { fail(new Error('не найдено на rezka: ' + (titles.join(' / ') || movie.title))); return; }
 var q = titles[qi++];
-getText(searchRel(q, 1), { method: 'GET' }, function (html) {
+getText(searchRel(q, 1), { method: 'GET', auth: false }, function (html) {
 var scored = parseList(html)
 .map(function (it) { it._s = scoreOf(it, titles, year); return it; })
 .filter(function (it) { return it._s >= 2; })
@@ -650,19 +693,11 @@ Lampa.Player.listener.follow('destroy', onDestroy);
 });
 }
 
-// ==================== NAV / SCROLL ====================
+// ==================== NAV / SCROLL (collectionSet ТОЛЬКО на входе в экран) ====================
 function pageWrap(scroll) {
 var w = $('<div class="rezka-page layer--wheight"></div>');
 w.append(scroll.render());
 return w;
-}
-function refreshNav(scroll, compName, getLast, interacted) {
-try {
-var act = Lampa.Activity.active();
-if (!act || act.component !== compName) return;
-Lampa.Controller.collectionSet(scroll.render());
-if (!interacted) Lampa.Controller.collectionFocus((getLast && getLast()) || false, scroll.render());
-} catch (e) {}
 }
 function makeController(comp, scroll, getLast) {
 function follow() {
@@ -701,6 +736,14 @@ Lampa.Controller.toggle('content');
 };
 comp.stop = function () {};
 }
+function initialFocusLater(scroll, interactedRef) {
+setTimeout(function () {
+try {
+if (!interactedRef.get && !scroll.render().find('.focus').length)
+Lampa.Controller.collectionFocus(false, scroll.render());
+} catch (e) {}
+}, 700);
+}
 
 // ==================== UI ====================
 function sectionTitle(t) { return $('<div class="rezka-section">' + esc(t) + '</div>'); }
@@ -730,9 +773,10 @@ return $('<div class="rezka-cont selector">' +
 '<div class="rezka-cont__title">' + esc(item.title) + '</div>' +
 '<div class="rezka-cont__info">' + esc(item.info || '') + '</div></div>');
 }
-function bindCard(el, it, scroll, setLast, resume) {
+function bindCard(el, it, scroll, setLast, resume, hScroll) {
 el.on('hover:focus', function () {
 setLast(el);
+if (hScroll) hScroll.update(el, true);
 if (scroll) scroll.update(el, true);
 });
 el.on('hover:enter', function () {
@@ -759,9 +803,8 @@ var HOME_ROWS = [
 function RezkaMain(object) {
 var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
 var wrap = pageWrap(scroll);
-var last = false, inited = false, interacted = false;
-function setLast(el) { last = el; interacted = true; }
-function nav() { refreshNav(scroll, COMP_MAIN, function () { return last; }, interacted); }
+var last = false, inited = false, interacted = { get: false };
+function setLast(el) { last = el; interacted.get = true; }
 function openSearch() {
 if (Lampa.Search && Lampa.Search.open) {
 Lampa.Search.open({ onBack: function () { Lampa.Controller.toggle('content'); } });
@@ -769,7 +812,6 @@ return;
 }
 Lampa.Activity.push({ url: '', title: 'Поиск', component: COMP_LIST, search: '', page: 1 });
 }
-// горизонтальная лента с догрузкой вправо (onEnd скролла + кнопка-страница)
 function makeRowH(rel, title) {
 var box = $('<div class="rezka-rowbox"></div>');
 box.append(sectionTitle(title));
@@ -779,42 +821,28 @@ line.append('<div class="rezka-note">Загрузка…</div>');
 h.append(line);
 box.append(h.render());
 var page = 1, busy = false, doneAll = false;
-function addItems(items) {
-items.forEach(function (it) {
-var el = cardEl(it, false);
-el.on('hover:focus', function () {
-setLast(el);
-h.update(el, true);
-scroll.update(box, true);
-});
-el.on('hover:enter', function () {
-Lampa.Activity.push({
-url: '', title: it.title || 'Rezka', component: COMP_CARD,
-card_url: it.url, card_meta: it, page: 1
-});
-});
-line.append(el);
-});
-}
 function loadMore() {
 if (busy || doneAll || !inited) return;
 busy = true;
-getText(nextRel(rel, page), { method: 'GET' }, function (html) {
+getText(nextRel(rel, page), { method: 'GET', auth: false }, function (html) {
 busy = false;
 if (!inited) return;
 line.find('.rezka-note').remove();
 var items = parseList(html).slice(0, 14);
 if (!items.length) { doneAll = true; return; }
-addItems(items);
+items.forEach(function (it) {
+var el = cardEl(it, false);
+bindCard(el, it, scroll, setLast, false, h);
+line.append(el);
+});
 if (!hasNextPage(html, page + 1)) doneAll = true;
 else {
 page++;
 var more = btnEl('Ещё → стр. ' + page);
-more.on('hover:focus', function () { setLast(more); h.update(more, true); scroll.update(box, true); });
+more.on('hover:focus', function () { setLast(more); h.update(more, true); });
 more.on('hover:enter', function () { more.remove(); loadMore(); });
 line.append(more);
 }
-nav();
 }, function () {
 busy = false;
 if (inited) line.find('.rezka-note').text('Ошибка загрузки ленты');
@@ -825,12 +853,12 @@ loadMore();
 return box;
 }
 function fillContinue(grid) {
-getText('continue/', { method: 'GET' }, function (html) {
+getText('continue/', { method: 'GET', auth: true }, function (html) {
 if (!inited) return;
 grid.empty();
-if (isBadHtml(html)) { grid.append('<div class="rezka-note">«Досмотреть» недоступно (нужна авторизация rezka)</div>'); nav(); return; }
+if (isBadHtml(html)) { grid.append('<div class="rezka-note">«Досмотреть» недоступно (нужна авторизация rezka)</div>'); return; }
 var items = parseContinue(html).slice(0, 15);
-if (!items.length) { grid.append('<div class="rezka-note">На rezka нет начатых просмотров</div>'); nav(); return; }
+if (!items.length) { grid.append('<div class="rezka-note">На rezka нет начатых просмотров</div>'); return; }
 grid.append(continueHeadEl());
 items.forEach(function (it) {
 var el = continueRowEl(it);
@@ -843,9 +871,8 @@ card_url: it.url, card_meta: it, resume: it, page: 1
 });
 grid.append(el);
 });
-nav();
 }, function () {
-if (inited) { grid.html('<div class="rezka-note">«Досмотреть» недоступно (нужна авторизация rezka)</div>'); nav(); }
+if (inited) grid.html('<div class="rezka-note">«Досмотреть» недоступно (нужна авторизация rezka)</div>');
 });
 }
 function build() {
@@ -861,7 +888,7 @@ scroll.append(sectionTitle('Продолжить просмотр (локаль�
 var hg = $('<div class="rezka-grid"></div>');
 hist.slice(0, 10).forEach(function (h) {
 var el = cardEl(h, true);
-bindCard(el, h, scroll, setLast, true);
+bindCard(el, h, scroll, setLast, true, null);
 el.on('hover:long', function () {
 Lampa.Select.show({
 title: h.title,
@@ -900,9 +927,13 @@ HOME_ROWS.forEach(function (row) { scroll.append(makeRowH(row.rel, row.title)); 
 if (!jarHasAuth()) {
 scroll.append($('<div class="rezka-note">Нет авторизации: Настройки → HDREZKA → «Cookies вручную» или «Войти на rezka».</div>'));
 }
-nav();
 }
-this.create = function () { inited = true; build(); return this.render(); };
+this.create = function () {
+inited = true;
+build();
+initialFocusLater(scroll, interacted);
+return this.render();
+};
 this.destroy = function () { inited = false; scroll.destroy(); };
 this.render = function () { return wrap; };
 this.empty = function () {};
@@ -913,9 +944,8 @@ makeController(this, scroll, function () { return last; });
 function RezkaList(object) {
 var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
 var wrap = pageWrap(scroll);
-var last = false, page = object.page || 1, inited = false, interacted = false;
-function setLast(el) { last = el; interacted = true; }
-function nav() { refreshNav(scroll, COMP_LIST, function () { return last; }, interacted); }
+var last = false, page = object.page || 1, inited = false, interacted = { get: false };
+function setLast(el) { last = el; interacted.get = true; }
 function rel() {
 if (object.search) return searchRel(object.search, page);
 var base = object.section || 'films/';
@@ -924,16 +954,16 @@ return page > 1 ? base + 'page/' + page + '/' : base;
 function load() {
 scroll.clear();
 scroll.append(sectionTitle('Загрузка…'));
-getText(rel(), { method: 'GET' }, function (html) {
+getText(rel(), { method: 'GET', auth: false }, function (html) {
 if (!inited) return;
 scroll.clear();
-if (isBadHtml(html)) { scroll.append(sectionTitle('Недоступно: ' + snippet(html, 40))); nav(); return; }
+if (isBadHtml(html)) { scroll.append(sectionTitle('Недоступно: ' + snippet(html, 40))); return; }
 var items = parseList(html);
-if (!items.length) { scroll.append(sectionTitle('Ничего не найдено')); nav(); return; }
+if (!items.length) { scroll.append(sectionTitle('Ничего не найдено')); return; }
 var grid = $('<div class="rezka-grid"></div>');
 items.forEach(function (it) {
 var el = cardEl(it, false);
-bindCard(el, it, scroll, setLast, false);
+bindCard(el, it, scroll, setLast, false, null);
 grid.append(el);
 });
 scroll.append(grid);
@@ -943,15 +973,13 @@ next.on('hover:focus', function () { setLast(next); scroll.update(next, true); }
 next.on('hover:enter', function () { page++; load(); });
 scroll.append(next);
 }
-nav();
 }, function (e) {
 if (!inited) return;
 scroll.clear();
 scroll.append(sectionTitle('Ошибка: ' + (e && e.message ? e.message : 'загрузки')));
-nav();
 });
 }
-this.create = function () { inited = true; load(); return this.render(); };
+this.create = function () { inited = true; load(); initialFocusLater(scroll, interacted); return this.render(); };
 this.destroy = function () { inited = false; scroll.destroy(); };
 this.render = function () { return wrap; };
 this.empty = function () {};
@@ -962,11 +990,10 @@ makeController(this, scroll, function () { return last; });
 function RezkaCard(object) {
 var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
 var wrap = pageWrap(scroll);
-var last = false, inited = false, interacted = false;
+var last = false, inited = false, interacted = { get: false };
 var card = null, voiceIdx = 0, seasonId = '', episodes = [];
 var meta = object.card_meta || {};
-function setLast(el) { last = el; interacted = true; }
-function nav() { refreshNav(scroll, COMP_CARD, function () { return last; }, interacted); }
+function setLast(el) { last = el; interacted.get = true; }
 function initialCard() {
 var rel = object.card_url || meta.url || '';
 var m = rel.match(/\/(\d+)-/);
@@ -1012,14 +1039,13 @@ meta2.hash = hashFor(meta2);
 buildSeasonPlaylist(card, meta2, episodes, function (playlist) { playMeta(meta2, playlist); });
 }
 function playMovie() { playMeta(baseMeta(), null); }
-// добор постера через быстрый поиск (для «Досмотреть», где в таблице сайта постеров нет)
 function enrichPoster() {
 if (card.poster || !card.title || card.title === 'Загрузка…') return;
-getText(searchRel(card.title, 1), { method: 'GET' }, function (html) {
+getText(searchRel(card.title, 1), { method: 'GET', auth: false }, function (html) {
 if (!inited) return;
 var items = parseList(html), nt = norm(card.title), i;
 for (i = 0; i < items.length; i++) {
-if (norm(items[i].title) === nt && items[i].url === card.rel) { card.poster = items[i].poster; if (!card.descr || card.descr === (meta.info || '')) card.descr = items[i].info; break; }
+if (norm(items[i].title) === nt && items[i].url === card.rel) { card.poster = items[i].poster; if (!card.descr) card.descr = items[i].info; break; }
 }
 if (!card.poster) for (i = 0; i < items.length; i++) if (norm(items[i].title) === nt) { card.poster = items[i].poster; break; }
 render();
@@ -1027,11 +1053,12 @@ render();
 }
 function render() {
 scroll.clear();
-if (!card) { scroll.append(sectionTitle('Загрузка…')); nav(); return; }
+if (!card) { scroll.append(sectionTitle('Загрузка…')); return; }
 try { if (Lampa.Background && Lampa.Background.change) Lampa.Background.change(card.poster); } catch (e) {}
 scroll.append($('<div class="rezka-head">' +
 '<div class="rezka-head__poster">' + (card.poster ? '<img src="' + esc(card.poster) + '">' : '') + '</div>' +
 '<div class="rezka-head__info"><div class="rezka-head__title">' + esc(card.title) + '</div>' +
+'<div class="rezka-head__meta">' + esc(meta.info || '') + '</div>' +
 '<div class="rezka-head__descr">' + esc(card.descr) + '</div></div></div>'));
 if (card._htmlFail) scroll.append($('<div class="rezka-note">HTML карточки не получен: ' + esc(snippet(card._htmlFail, 120)) + '</div>'));
 var btns = $('<div class="rezka-btns"></div>');
@@ -1090,7 +1117,7 @@ btns.append(bS);
 scroll.append(btns);
 if (card.isSerial) {
 scroll.append(sectionTitle('Серии'));
-if (!episodes.length) { scroll.append($('<div class="rezka-note">Серии не загрузились</div>')); nav(); return; }
+if (!episodes.length) { scroll.append($('<div class="rezka-note">Серии не загрузились</div>')); return; }
 episodes.forEach(function (ep) {
 var meta2 = baseMeta(); meta2.episode = ep.id;
 var p = percentOf(meta2);
@@ -1116,7 +1143,6 @@ onBack: function () { Lampa.Controller.toggle('content'); }
 scroll.append(row);
 });
 }
-nav();
 }
 function afterCard() {
 pickVoice();
@@ -1149,6 +1175,7 @@ this.create = function () {
 inited = true;
 card = initialCard();
 render();
+initialFocusLater(scroll, interacted);
 if (card.rel) loadCardHtml();
 else { card.title = meta.title || 'Нет URL'; render(); }
 return this.render();
@@ -1208,7 +1235,7 @@ params: { start_typing: false, abort: false },
 search: function (params, oncomplite) {
 var query = (params && params.query) || '';
 if (query.length < 3) { oncomplite([]); return; }
-getText(searchRel(query, 1), { method: 'GET' }, function (html) {
+getText(searchRel(query, 1), { method: 'GET', auth: false }, function (html) {
 var cards = parseList(html).slice(0, 20).map(function (it) {
 return {
 id: 'rezka_' + Lampa.Utils.hash(it.url),
@@ -1273,13 +1300,13 @@ name: 'HDREZKA',
 icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 6.5 6 3.5-6 3.5v-7z"/></svg>'
 });
 textParam('rezka_proxy', 'Прокси (Worker)', 'Адрес вашего Cloudflare Worker', { set: function (v) { stSet('proxy', v); } });
-textParam('rezka_mirror', 'Основное зеркало', 'Зеркало для авторизованных разделов (/continue/, вход): https://rezka.fi', { set: function (v) { stSet('mirror', v || 'https://rezka.fi'); } });
-textParam('rezka_mirrors', 'Каскад зеркал для карточек', 'Через запятую: https://rezka.fi,https://rezka.ag,https://hdrezka.ag', { set: function (v) { stSet('mirrors', v); } });
+textParam('rezka_mirror', 'Основное зеркало (auth)', 'Зеркало для /continue/ и входа: https://rezka.fi', { set: function (v) { stSet('mirror', v || 'https://rezka.fi'); } });
+textParam('rezka_mirrors', 'Каскад зеркал контента (анонимно)', 'Порядок: https://rezka.ag,https://hdrezka.ag,https://rezka.fi', { set: function (v) { stSet('mirrors', v); } });
+textParam('rezka_diag_rel', 'URL для диагностики', 'Относительный путь карточки, напр. films/drama/33787-doch-2017.html', { set: function (v) { stSet('diag_rel', v); } });
 textParam('rezka_email', 'Email / логин rezka', 'От вашего аккаунта rezka', { set: function (v) { stSet('email', v); } });
 textParam('rezka_password_ui', 'Пароль rezka', 'Хранится локально; редактор открывается пустым',
 { mask: true, get: function () { return stGet('password', ''); }, set: function (v) { stSet('password', v); } });
-textParam('rezka_cookies_ui', 'Cookies вручную (необязательно)',
-'ПОЛНАЯ строка cookie из браузера (для основного зеркала)',
+textParam('rezka_cookies_ui', 'Cookies вручную', 'ПОЛНАЯ строка cookie из браузера (только для auth-маршрутов)',
 { mask: true, get: function () { return stGet('cookies', ''); }, set: function (v) { stSet('cookies', v); } });
 Lampa.SettingsApi.addParam({
 component: 'rezka',
@@ -1289,28 +1316,26 @@ onChange: function (v) { stSet('transport', v); }
 });
 Lampa.SettingsApi.addParam({
 component: 'rezka',
+param: { name: 'rezka_auth_cards', type: 'trigger', default: false },
+field: { name: 'Cookies для карточек (Premium)', description: 'Вкл только если worker работает с вашего IP (иначе 301-рулетка)' },
+onChange: function (v) { stSet('auth_cards', v ? 'true' : ''); }
+});
+Lampa.SettingsApi.addParam({
+component: 'rezka',
+param: { name: 'rezka_diag_btn', type: 'button', default: '' },
+field: { name: 'Диагностика (anon/auth x зеркала)', description: 'Показывает матрицу ответов: где карточка 200, где 301, где ajax OK' },
+onChange: function () { runDiag(); }
+});
+Lampa.SettingsApi.addParam({
+component: 'rezka',
 param: { name: 'rezka_login_btn', type: 'button', default: '' },
-field: { name: 'Войти на rezka', description: 'Пробует вход по каскаду зеркал' },
+field: { name: 'Войти на rezka', description: 'Вход на основное зеркало с cookies' },
 onChange: function () {
 Lampa.Noty.show('Rezka: вход… (' + transportMode() + ')');
 apiLogin(function (ok, err) {
 Lampa.Noty.show(ok ? 'Rezka: вход выполнен' : ('Rezka: ' + err), ok ? {} : { style: 'error' });
 try { Lampa.Settings.update(); } catch (e) {}
 });
-}
-});
-Lampa.SettingsApi.addParam({
-component: 'rezka',
-param: { name: 'rezka_test_btn', type: 'button', default: '' },
-field: { name: 'Тест соединения', description: 'Запрос главной rezka через текущий транспорт' },
-onChange: function () {
-Lampa.Noty.show('Rezka: проверка… (' + transportMode() + ')');
-getText('/', { method: 'GET' }, function (text, res) {
-var okHtml = /b-content__inline|<html/i.test(text || '');
-Lampa.Noty.show('Rezka: HTTP ' + (res ? res.status : '?') +
-(okHtml ? ', HTML похож на rezka' : ', ответ: ' + snippet(text, 60)) +
-(jarHasAuth() ? ', авторизация есть' : ', без авторизации'));
-}, function (e) { Lampa.Noty.show('Rezka: ' + e.message, { style: 'error' }); });
 }
 });
 Lampa.SettingsApi.addParam({
@@ -1336,39 +1361,39 @@ Lampa.Template.add('rezka_css', '<style>' +
 '.rezka-note{color:#888;padding:.6em 0}' +
 '.rezka-grid{display:flex;flex-wrap:wrap}' +
 '.rezka-rows{display:flex;flex-direction:column;width:100%}' +
-'.rezka-rowbox{margin-bottom:1.4em}' +
+'.rezka-rowbox{margin-bottom:1.6em}' +
 '.rezka-line{display:flex;flex-wrap:nowrap;width:max-content;align-items:flex-start}' +
 '.rezka-line .rezka-card{flex-shrink:0}' +
-'.rezka-line .rezka-btn{margin-top:3em}' +
-'.rezka-card{width:9.5em;margin:0 1.2em 1.6em 0}' +
-'.rezka-card__poster{width:9.5em;height:14em;background:#1c1c1c;border-radius:.6em;overflow:hidden;position:relative}' +
+'.rezka-line .rezka-btn{margin-top:4em}' +
+'.rezka-card{width:11.5em;margin:0 1.4em 1.8em 0}' +
+'.rezka-card__poster{width:11.5em;height:17em;background:#1c1c1c;border-radius:.7em;overflow:hidden;position:relative}' +
 '.rezka-card__poster img{width:100%;height:100%;object-fit:cover}' +
-'.rezka-card.focus .rezka-card__poster{box-shadow:0 0 0 .25em #fff}' +
-'.rezka-card__title{font-size:.95em;margin-top:.5em;min-height:2.2em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}' +
-'.rezka-card__meta,.rezka-card__ep{font-size:.8em;color:#8a8a8a;min-height:1.2em}' +
-'.rezka-bar{position:absolute;left:0;right:0;bottom:0;height:.35em;background:#00000088}' +
+'.rezka-card.focus .rezka-card__poster{box-shadow:0 0 0 .3em #fff}' +
+'.rezka-card__title{font-size:1.05em;margin-top:.6em;min-height:2.4em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}' +
+'.rezka-card__meta,.rezka-card__ep{font-size:.85em;color:#8a8a8a;min-height:1.3em}' +
+'.rezka-bar{position:absolute;left:0;right:0;bottom:0;height:.4em;background:#00000088}' +
 '.rezka-bar>div{height:100%;background:#5c86c5}' +
 '.rezka-btns{display:flex;flex-wrap:wrap;margin:.4em 0 1em}' +
-'.rezka-btn{padding:.8em 1.4em;background:#2a2a2a;border-radius:.6em;margin:0 .8em .8em 0}' +
-'.rezka-btn.focus{background:#3d3d3d;box-shadow:0 0 0 .2em #fff}' +
+'.rezka-btn{padding:.9em 1.6em;background:#2a2a2a;border-radius:.6em;margin:0 .9em .9em 0;font-size:1.05em}' +
+'.rezka-btn.focus{background:#3d3d3d;box-shadow:0 0 0 .25em #fff}' +
 '.rezka-head{display:flex;padding:1em 0 1.4em}' +
-'.rezka-head__poster{width:12em;height:18em;border-radius:.7em;overflow:hidden;background:#1c1c1c;margin-right:2em;flex-shrink:0}' +
+'.rezka-head__poster{width:13em;height:19em;border-radius:.8em;overflow:hidden;background:#1c1c1c;margin-right:2.2em;flex-shrink:0}' +
 '.rezka-head__poster img{width:100%;height:100%;object-fit:cover}' +
-'.rezka-head__title{font-size:1.7em;margin-bottom:.6em}' +
-'.rezka-head__descr{color:#a5a5a5;line-height:1.45;max-height:12em;overflow:hidden}' +
-'.rezka-ep{display:flex;align-items:center;padding:.9em 1.2em;background:#232323;border-radius:.6em;margin-bottom:.6em}' +
-'.rezka-ep.focus{box-shadow:0 0 0 .2em #fff}' +
-'.rezka-ep__num{width:12em}' +
-'.rezka-ep__info{flex:1;color:#8a8a8a}' +
-'.rezka-ep__bar{flex:1;height:.4em;background:#3a3a3a;border-radius:.2em;margin:0 1em}' +
-'.rezka-ep__bar>div{height:100%;background:#5c86c5;border-radius:.2em}' +
-'.rezka-ep__pct{width:3.5em;text-align:right;color:#8a8a8a}' +
-'.rezka-cont{display:flex;align-items:center;width:100%;padding:.8em 1.2em;background:#232323;border-radius:.6em;margin-bottom:.5em;box-sizing:border-box}' +
-'.rezka-cont.focus{box-shadow:0 0 0 .2em #fff}' +
-'.rezka-cont--head{background:transparent;color:#9a9a9a;padding:.4em 1.2em;margin-bottom:.2em}' +
-'.rezka-cont__date{width:7em;flex-shrink:0;color:#8a8a8a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+'.rezka-head__title{font-size:1.9em;margin-bottom:.4em}' +
+'.rezka-head__meta{color:#c7c7c7;margin-bottom:.7em}' +
+'.rezka-head__descr{color:#a5a5a5;line-height:1.5;max-height:13em;overflow:hidden}' +
+'.rezka-ep{display:flex;align-items:center;padding:1em 1.3em;background:#232323;border-radius:.6em;margin-bottom:.7em;font-size:1.05em}' +
+'.rezka-ep.focus{box-shadow:0 0 0 .25em #fff}' +
+'.rezka-ep__num{width:13em}' +
+'.rezka-ep__bar{flex:1;height:.45em;background:#3a3a3a;border-radius:.25em;margin:0 1em}' +
+'.rezka-ep__bar>div{height:100%;background:#5c86c5;border-radius:.25em}' +
+'.rezka-ep__pct{width:3.8em;text-align:right;color:#8a8a8a}' +
+'.rezka-cont{display:flex;align-items:center;width:100%;padding:.9em 1.3em;background:#232323;border-radius:.6em;margin-bottom:.55em;box-sizing:border-box;font-size:1.05em}' +
+'.rezka-cont.focus{box-shadow:0 0 0 .25em #fff}' +
+'.rezka-cont--head{background:transparent;color:#9a9a9a;padding:.4em 1.3em;margin-bottom:.2em}' +
+'.rezka-cont__date{width:7.5em;flex-shrink:0;color:#8a8a8a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
 '.rezka-cont__title{flex:1;min-width:0;margin:0 1.2em;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
-'.rezka-cont__info{width:16em;flex-shrink:0;text-align:right;color:#8a8a8a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+'.rezka-cont__info{width:17em;flex-shrink:0;text-align:right;color:#8a8a8a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
 '.rezka-cont--head .rezka-cont__title,.rezka-cont--head .rezka-cont__info{color:#9a9a9a}' +
 '.view--rezka .full-start__button__ico{color:#5c86c5}' +
 '</style>');
@@ -1399,9 +1424,9 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.1.0',
+version: '5.0.0',
 name: 'HDREZKA Lab',
-description: 'Фильмы и сериалы с rezka: каскад зеркал, ленты с догрузкой, озвучки, серии, история',
+description: 'Rezka: анонимный каскад зеркал для контента, auth-зеркало для истории, ленты с догрузкой',
 component: COMP_MAIN,
 onContextMenu: function () { return { title: 'Смотреть на HDREZKA' }; },
 onContextLauch: function (card) {
