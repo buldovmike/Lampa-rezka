@@ -1,8 +1,9 @@
 /**
 HDREZKA for Lampa/Luxo (Apple TV / web / Android)
-v2.6.0 — капитальная переработка парсера (слияние по href + regex-fallback),
-починен источник поиска (params.start_typing), сезоны/серии через get_cdn_series
-action=get_episodes, скролл в списках, каскад «Новинки», кнопка-источник в карточке.
+v2.7.0 — парсер по реальной вёрстке rezka.fi (data-id/data-url, cover img, link a, meta div),
+поиск через q= (а не story=), ряды главной: Сейчас смотрят / Новинки / Популярные (/new/?filter=…),
+пагинация по .b-navigation, остальное из v2.6.0 (источник в карточке, сезоны через get_cdn_series,
+починенный Search.addSource с params.start_typing, скролл, настройки, worker-транспорт).
 */
 (function () {
 'use strict';
@@ -61,13 +62,15 @@ function nodeList(sel, root) { return Array.prototype.slice.call((root || docume
 function snippet(s, n) { return String(s || '').replace(/\s+/g, ' ').slice(0, n || 100); }
 function norm(s) { return (s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ''); }
 function cleanTitle(s) {
-    s = String(s || '').replace(/\s+/g, ' ').trim();
-    return s.replace(/\s*(?:19|20)\d{2}\s*$/, '').trim();
+    return String(s || '').replace(/\s+/g, ' ').trim();
 }
-function goodHref(h) {
-    return h && /\.html(\?|$)/.test(h) && h.indexOf('javascript:') < 0 &&
-        h.indexOf('/login') < 0 && h.indexOf('/user/') < 0;
+// поиск rezka: параметр q= (НЕ story=!)
+function searchRel(q, page) {
+    var r = 'search/?do=search&subaction=search&q=' + encodeURIComponent(q);
+    if (page && page > 1) r += '&search_start=' + page + '&full_search=1';
+    return r;
 }
+function hasNextPage(html, next) { return String(html).indexOf('/page/' + next + '/') >= 0; }
 
 // ==================== COOKIE-JAR ====================
 function jarGet() { return stGet('cookies', '') || ''; }
@@ -141,64 +144,59 @@ function getJson(rel, form, onDone, onFail) {
     }, onFail);
 }
 
-// ==================== ПАРСЕР СПИСКОВ (слияние по href) ====================
+// ==================== ПАРСЕР СПИСКОВ (точная вёрстка rezka.fi + fallback) ====================
 function parseList(html) {
+    var out = [];
+    try {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        nodeList('div.b-content__inline_item', doc).forEach(function (item) {
+            var href = item.getAttribute('data-url') || '';
+            var titleA = item.querySelector('.b-content__inline_item-link a');
+            var anyA = item.querySelector('a[href]');
+            if (!href && anyA) href = anyA.getAttribute('href') || '';
+            if (!href || href.indexOf('.html') < 0) return;
+            var img = item.querySelector('.b-content__inline_item-cover img') || item.querySelector('img');
+            var title = textOf(titleA) || (anyA ? textOf(anyA) : '');
+            var metaLine = '';
+            var metaDivs = item.querySelectorAll('.b-content__inline_item-link div');
+            if (metaDivs.length) metaLine = textOf(metaDivs[0]);
+            var year = (metaLine.match(/(19|20)\d{2}/) || [])[0] || '';
+            out.push({
+                id: item.getAttribute('data-id') || '',
+                url: relOf(href),
+                title: cleanTitle(title) || 'Без названия',
+                year: year,
+                info: metaLine,
+                poster: img ? absUrl(img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-original') || '') : '',
+                type: href.indexOf('/series/') >= 0 ? 'serial' : 'movie'
+            });
+        });
+    } catch (e) {}
+    if (out.length) return out;
+    // fallback: слияние по href (если вёрстку когда-то поменяют)
     var order = [], map = {};
     function rec(href) {
         var key = relOf(href);
         if (!map[key]) {
-            map[key] = {
-                url: key, title: '', year: '', poster: '',
-                type: key.indexOf('/series/') >= 0 ? 'serial' : 'movie'
-            };
+            map[key] = { url: key, title: '', year: '', info: '', poster: '', type: key.indexOf('/series/') >= 0 ? 'serial' : 'movie' };
             order.push(key);
         }
         return map[key];
     }
-    function feed(href, node) {
-        var o = rec(href);
-        var img = node.querySelector ? node.querySelector('img') : null;
-        var tEl = node.querySelector ? node.querySelector('.b-content__inline_item-title') : null;
-        var txt = node ? textOf(node) : '';
-        if (img && !o.poster) {
-            o.poster = absUrl(img.getAttribute('src') || img.getAttribute('data-src') ||
-                img.getAttribute('data-original') || img.getAttribute('data-lazy-src') || '');
-        }
-        var t = tEl ? textOf(tEl) : '';
-        if (!t && !img && txt) t = cleanTitle(txt);
-        if (t && !o.title) o.title = t;
-        if (!o.year && txt) { var ym = txt.match(/(19|20)\d{2}/); if (ym) o.year = ym[0]; }
-    }
+    function good(h) { return h && /\.html(\?|$)/.test(h) && h.indexOf('javascript:') < 0; }
     try {
-        var doc = new DOMParser().parseFromString(html, 'text/html');
-        nodeList('a[href]', doc).forEach(function (a) {
+        var doc2 = new DOMParser().parseFromString(html, 'text/html');
+        nodeList('a[href]', doc2).forEach(function (a) {
             var href = a.getAttribute('href');
-            if (!goodHref(href)) return;
-            feed(href, a);
-        });
-        nodeList('div.b-content__inline_item', doc).forEach(function (item) {
-            var a = item.querySelector('a[href]');
-            if (!a || !goodHref(a.getAttribute('href'))) return;
-            feed(a.getAttribute('href'), item);
+            if (!good(href)) return;
+            var o = rec(href);
+            var img = a.querySelector('img');
+            if (img && !o.poster) o.poster = absUrl(img.getAttribute('src') || img.getAttribute('data-src') || '');
+            var txt = textOf(a);
+            if (!img && txt && !o.title) o.title = cleanTitle(txt.replace(/\s*(?:19|20)\d{2}.*$/, ''));
+            if (!o.year && txt) { var ym = txt.match(/(19|20)\d{2}/); if (ym) o.year = ym[0]; }
         });
     } catch (e) {}
-    var out = [];
-    order.forEach(function (k) { var o = map[k]; if (o.title || o.poster) out.push(o); });
-    if (out.length) return out;
-    // regex-fallback: работает даже если DOMParser не увидел классов
-    var re = /<a[^>]+href="([^"]+\.html)"[^>]*>([\s\S]*?)<\/a>/g, m;
-    while ((m = re.exec(html)) !== null) {
-        if (!goodHref(m[1])) continue;
-        var o2 = rec(m[1]);
-        var inner = m[2];
-        var im = /<img[^>]+(?:src|data-src|data-original|data-lazy-src)="([^"]+)"/i.exec(inner);
-        if (im && !o2.poster) o2.poster = absUrl(im[1]);
-        var tm = /class="[^"]*inline_item-title[^"]*"[^>]*>([^<]+)</i.exec(inner);
-        var t2 = cleanTitle(tm ? tm[1] : inner.replace(/<[^>]+>/g, ' '));
-        if (t2 && !o2.title) o2.title = t2;
-        if (!o2.year) { var y2 = inner.match(/(19|20)\d{2}/); if (y2) o2.year = y2[0]; }
-    }
-    out = [];
     order.forEach(function (k) { var o = map[k]; if (o.title || o.poster) out.push(o); });
     return out;
 }
@@ -253,8 +251,6 @@ function apiCard(rel, cb, fail) {
         });
     }, fail);
 }
-// Сезоны+серии: основной путь get_cdn_series action=get_episodes (актуально на rezka.fi),
-// fallback — старый ajax/get_episodes по сезонам.
 function apiSeasonData(card, voiceId, cb, fail) {
     card._sd = card._sd || {};
     if (card._sd[voiceId]) { cb(card._sd[voiceId]); return; }
@@ -361,7 +357,7 @@ function findOnRezka(movie, cb, fail) {
     function next() {
         if (qi >= titles.length) { fail(new Error('не найдено на rezka: ' + (titles.join(' / ') || movie.title))); return; }
         var q = titles[qi++];
-        getText('search/?do=search&subaction=search&story=' + encodeURIComponent(q), null, function (html) {
+        getText(searchRel(q, 1), null, function (html) {
             var scored = parseList(html)
                 .map(function (it) { it._s = scoreOf(it, titles, year); return it; })
                 .filter(function (it) { return it._s >= 2; })
@@ -484,10 +480,11 @@ function initPlayerHooks() {
 // ==================== UI: ОБЩИЕ ЭЛЕМЕНТЫ ====================
 function sectionTitle(t) { return $('<div class="rezka-section">' + esc(t) + '</div>'); }
 function cardEl(item, withProgress) {
+    var metaLine = item.info || (item.year ? item.year : '');
     var el = $('<div class="rezka-card selector">' +
         '<div class="rezka-card__poster">' + (item.poster ? '<img src="' + esc(item.poster) + '" loading="lazy">' : '') + '</div>' +
         '<div class="rezka-card__title">' + esc(item.title || 'Без названия') + '</div>' +
-        '<div class="rezka-card__meta">' + esc(item.year || '') + (item.type === 'serial' ? ' · сериал' : '') + '</div>' +
+        '<div class="rezka-card__meta">' + esc(metaLine) + (item.type === 'serial' ? ' · сериал' : '') + '</div>' +
         '</div>');
     if (withProgress) {
         var p = percentOf(item);
@@ -499,7 +496,7 @@ function cardEl(item, withProgress) {
 function bindCard(el, it, scroll, setLast, resume) {
     el.on('hover:focus', function () {
         setLast(el);
-        if (scroll) scroll.update(el, true);   // без этого список не листается
+        if (scroll) scroll.update(el, true);
     });
     el.on('hover:enter', function () {
         Lampa.Activity.push({
@@ -530,14 +527,18 @@ function makeController(comp, scroll, getLast) {
     comp.stop = function () {};
 }
 
-// ==================== ЭКРАН: ГЛАВНЫЙ ====================
+// ==================== ЭКРАН: ГЛАВНЫЙ (ленты как на rezka.fi) ====================
 var SECTIONS = [
     { key: 'films', title: 'Фильмы', path: 'films/' },
     { key: 'series', title: 'Сериалы', path: 'series/' },
     { key: 'cartoons', title: 'Мультфильмы', path: 'cartoons/' },
     { key: 'anime', title: 'Аниме', path: 'anime/' }
 ];
-var MAIN_TRY = ['', 'new/', 'films/orderby/lastgo/'];
+var HOME_ROWS = [
+    { title: 'Сейчас смотрят на rezka', rel: 'new/?filter=watching', limit: 12 },
+    { title: 'Последние поступления', rel: 'new/?filter=last', limit: 12 },
+    { title: 'Популярное на rezka', rel: 'new/?filter=popular', limit: 12 }
+];
 function RezkaMain(object) {
     var scroll = new Lampa.Scroll({ mask: true, over: true });
     var last = false, inited = false;
@@ -549,23 +550,20 @@ function RezkaMain(object) {
         }
         Lampa.Activity.push({ url: '', title: 'Поиск', component: COMP_LIST, search: '', page: 1 });
     }
-    function loadNovelties(ng, idx) {
-        if (!inited) return;
-        if (idx >= MAIN_TRY.length) {
-            ng.html('<div class="rezka-note">Главная не отдала список — откройте раздел «Фильмы» или «Сериалы»</div>');
-            return;
-        }
-        getText(MAIN_TRY[idx], null, function (html) {
+    function fillRow(grid, rel, limit) {
+        getText(rel, null, function (html) {
             if (!inited) return;
-            var items = parseList(html).slice(0, 14);
-            if (!items.length) { loadNovelties(ng, idx + 1); return; }
-            ng.empty();
+            grid.empty();
+            var items = parseList(html).slice(0, limit);
+            if (!items.length) { grid.append('<div class="rezka-note">Пусто</div>'); return; }
             items.forEach(function (it) {
                 var el = cardEl(it, false);
                 bindCard(el, it, scroll, setLast, false);
-                ng.append(el);
+                grid.append(el);
             });
-        }, function () { if (inited) loadNovelties(ng, idx + 1); });
+        }, function () {
+            if (inited) grid.html('<div class="rezka-note">Ошибка загрузки ленты</div>');
+        });
     }
     function build() {
         scroll.clear();
@@ -610,11 +608,13 @@ function RezkaMain(object) {
         bs.on('hover:enter', openSearch);
         btns.append(bs);
         scroll.append(btns);
-        scroll.append(sectionTitle('Новинки rezka'));
-        var ng = $('<div class="rezka-grid"></div>');
-        ng.append('<div class="rezka-note">Загрузка…</div>');
-        scroll.append(ng);
-        loadNovelties(ng, 0);
+        HOME_ROWS.forEach(function (row) {
+            scroll.append(sectionTitle(row.title));
+            var grid = $('<div class="rezka-grid"></div>');
+            grid.append('<div class="rezka-note">Загрузка…</div>');
+            scroll.append(grid);
+            fillRow(grid, row.rel, row.limit);
+        });
         if (!jarHasAuth()) {
             scroll.append($('<div class="rezka-note">Нет авторизации: Настройки → HDREZKA → «Cookies вручную» или «Войти на rezka».</div>'));
         }
@@ -632,11 +632,7 @@ function RezkaList(object) {
     var last = false, page = object.page || 1, inited = false;
     function setLast(el) { last = el; }
     function rel() {
-        if (object.search) {
-            var r = 'search/?do=search&subaction=search&story=' + encodeURIComponent(object.search);
-            if (page > 1) r += '&search_start=' + page + '&full_search=1';
-            return r;
-        }
+        if (object.search) return searchRel(object.search, page);
         var base = object.section || 'films/';
         return page > 1 ? base + 'page/' + page + '/' : base;
     }
@@ -655,10 +651,12 @@ function RezkaList(object) {
                 grid.append(el);
             });
             scroll.append(grid);
-            var next = btnEl('Следующая страница (' + (page + 1) + ')');
-            next.on('hover:focus', function () { last = next; scroll.update(next, true); });
-            next.on('hover:enter', function () { page++; load(); });
-            scroll.append(next);
+            if (hasNextPage(html, page + 1)) {
+                var next = btnEl('Следующая страница (' + (page + 1) + ')');
+                next.on('hover:focus', function () { last = next; scroll.update(next, true); });
+                next.on('hover:enter', function () { page++; load(); });
+                scroll.append(next);
+            }
         }, function (e) {
             if (!inited) return;
             scroll.clear();
@@ -867,24 +865,24 @@ function registerFullButton() {
     }, 1200);
 }
 
-// ==================== ПОИСК: ИСТОЧНИК В ЯДРЕ (без краха ядра) ====================
+// ==================== ПОИСК: ИСТОЧНИК В ЯДРЕ ====================
 function registerSearchSource() {
     if (!Lampa.Search || !Lampa.Search.addSource || window.rezka_search_added) return;
     window.rezka_search_added = true;
     Lampa.Search.addSource({
         title: 'HDREZKA',
-        params: { start_typing: false, abort: false },   // обязательно: ядро читает source.params.start_typing
+        params: { start_typing: false, abort: false },
         search: function (params, oncomplite) {
             var query = (params && params.query) || '';
             if (query.length < 3) { oncomplite([]); return; }
-            getText('search/?do=search&subaction=search&story=' + encodeURIComponent(query), null, function (html) {
+            getText(searchRel(query, 1), null, function (html) {
                 var cards = parseList(html).slice(0, 20).map(function (it) {
                     return {
                         id: 'rezka_' + Lampa.Utils.hash(it.url),
                         title: it.title,
                         original_title: it.title,
                         release_date: it.year || '0000',
-                        overview: '',
+                        overview: it.info || '',
                         img: it.poster,
                         poster_path: it.poster,
                         media_type: it.type === 'serial' ? 'tv' : 'movie',
@@ -1083,7 +1081,7 @@ function init() {
     Lampa.Component.add(COMP_CARD, RezkaCard);
     Lampa.Manifest.plugins = {
         type: 'video',
-        version: '2.6.0',
+        version: '2.7.0',
         name: 'HDREZKA Lab',
         description: 'Фильмы и сериалы с rezka: озвучки, сезоны, серии, история',
         component: COMP_MAIN,
