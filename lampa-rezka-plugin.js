@@ -94,9 +94,9 @@ try {
 fetch(proxyUrl() + '?r=' + encodeURIComponent(rel) + '&m=' + encodeURIComponent(mirror()) + '&dbg=1', {
 headers: { 'X-Rezka-Cookie': jarGet() }
 }).then(function (r) { return r.json(); }).then(function (d) {
-cb('dbg: status ' + d.status + ', hops ' + ((d.hops || []).length) +
-', cookies rezka: ' + ((d.setCookies || []).join(',') || 'нет') +
-', body: ' + snippet(String(d.bodyHead || ''), 70));
+var chain = (d.hops || []).map(function (h) { return h.status + '>' + String(h.to).replace(/^https?:\/\/[^/]+/, ''); }).join(' | ');
+cb('dbg: status ' + d.status + (d.loop ? ' [LOOP]' : '') + ', final: ' + String(d.finalUrl || '').replace(/^https?:\/\/[^/]+/, '') +
+', chain: ' + snippet(chain, 160) + ', body: ' + snippet(String(d.bodyHead || ''), 50));
 }).catch(function () { cb(''); });
 } catch (e) { cb(''); }
 }
