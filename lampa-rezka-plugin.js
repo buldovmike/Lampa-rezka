@@ -1,6 +1,9 @@
 /**
 HDREZKA for Lampa/Luxo (Apple TV / web / Android / Tizen)
-v2.9.0 — fix X-Requested-With header (broken cards), fix "Continue watching" 3-column table UI
+v3.0.0 — worker v7 compatible (fix "Redirect" stub), continue = real 3-column table
+(date | title | last info, title taken from column-2 link, NOT from #continue badge),
+card/episodes/stream parsers with regex fallbacks from page HTML,
+navigator/scroll hard-fix (manual .selector walk + collection refresh after async fill).
 */
 (function () {
 'use strict';
@@ -56,6 +59,7 @@ if (h.indexOf('//') === 0) return h.replace(/^\/\/[^/]+/, '');
 return h.replace(/^\//, '');
 }
 function textOf(el) { return el ? el.textContent.trim() : ''; }
+function stripTags(s) { return String(s || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(); }
 function nodeList(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
 function snippet(s, n) { return String(s || '').replace(/\s+/g, ' ').slice(0, n || 100); }
 function norm(s) { return (s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ''); }
@@ -67,6 +71,22 @@ return r;
 }
 function ajaxRel(path) { return path + '?t=' + Date.now(); }
 function hasNextPage(html, next) { return String(html).indexOf('/page/' + next + '/') >= 0; }
+function isBadHtml(html) {
+var t = String(html || '');
+if (!t) return true;
+if (/^\s*redirect/i.test(t)) return true;
+if (t.length < 500 && !/<html/i.test(t)) return true;
+if (/<title[^>]*>\s*(ВХОД|Вход|Login)/i.test(t) && t.indexOf('post_id') < 0 && t.indexOf('b-content__inline') < 0) return true;
+return false;
+}
+function badHtmlHint(html) {
+var t = snippet(html, 40);
+if (/^\s*redirect/i.test(String(html || '')))
+return 'воркер вернул заглушку «Redirect» — обновите Cloudflare Worker до v7';
+if (/<title[^>]*>\s*(ВХОД|Вход|Login)/i.test(String(html || '')))
+return 'rezka отдала страницу входа — вставьте cookies браузера в «Cookies вручную»';
+return 'пустой/битый ответ («' + t + '») — проверьте Worker v7 и cookies';
+}
 
 // ==================== COOKIE-JAR ====================
 function jarGet() { return stGet('cookies', '') || ''; }
@@ -103,11 +123,10 @@ if (options.referer) headers['X-Rezka-Referer'] = options.referer;
 if (body) headers['Content-Type'] = 'application/x-www-form-urlencoded';
 } else {
 url = mirror() + rel;
+if (options.referer) headers['Referer'] = options.referer;
 if (body) headers['Content-Type'] = 'application/x-www-form-urlencoded';
 }
-// FIX: Only add X-Requested-With for actual AJAX requests
 if (options.ajax) headers['X-Requested-With'] = 'XMLHttpRequest';
-
 fetch(url, {
 method: method, headers: headers, body: body,
 credentials: mode === 'proxy' ? 'omit' : 'include'
@@ -199,41 +218,52 @@ order.forEach(function (k) { var o = map[k]; if (o.title || o.poster) out.push(o
 return out;
 }
 
-// /continue/ — таблица «Дата | Название | Последняя информация»
+// /continue/ — ТАБЛИЦА: [Дата] [Название+ссылка] [Последняя информация]
+// #continue может висеть на бейдже «смотреть ещё N серий», поэтому title берём
+// из ссылки 2-й колонки, а не из текста #continue-янкоря.
 function parseContinue(html) {
-var out = [];
-try {
-var doc = new DOMParser().parseFromString(html, 'text/html');
-nodeList('a[href*="#continue"]', doc).forEach(function (a) {
-var href = (a.getAttribute('href') || '').split('#')[0];
-if (!href || href.indexOf('.html') < 0) return;
-var title = cleanTitle(textOf(a));
-if (!title) return;
-var row = a.closest ? a.closest('tr') : null;
-var date = '', info = '';
-if (row) {
-var tds = row.querySelectorAll('td');
-if (tds.length >= 3) {
-date = textOf(tds[0]);
-info = textOf(tds[tds.length - 1]);
-} else if (tds.length === 2) {
-date = textOf(tds[0]);
-info = textOf(tds[1]);
-}
-}
+var out = [], seen = {};
+function push(date, title, href, info) {
+var key = relOf(href);
+if (!key || key.indexOf('.html') < 0 || seen[key]) return;
+seen[key] = 1;
 var se = info.match(/(\d+)\s*(?:сезон|season)/i);
 var ep = info.match(/(\d+)\s*(?:серия|episode|сер\.)/i);
 out.push({
-url: relOf(href),
-title: title,
-date: date,
-info: info,
-season: se ? se[1] : '',
-episode: ep ? ep[1] : '',
-poster: '',
-type: href.indexOf('/series/') >= 0 ? 'serial' : 'movie'
+url: key, title: title, date: date, info: info,
+season: se ? se[1] : '', episode: ep ? ep[1] : '',
+poster: '', type: key.indexOf('/series/') >= 0 ? 'serial' : 'movie'
 });
+}
+try {
+var doc = new DOMParser().parseFromString(html, 'text/html');
+var rows = nodeList('table tr', doc);
+if (!rows.length) rows = nodeList('[class*="continue"] tr, [class*="continue"] li', doc);
+rows.forEach(function (tr) {
+var tds = tr.querySelectorAll('td');
+if (tds.length < 2) return;
+var date = cleanTitle(textOf(tds[0]));
+if (/^дата$/i.test(date)) return;
+var titleCell = tds.length >= 3 ? tds[1] : tds[0];
+var infoCell = tds[tds.length - 1];
+var a = titleCell.querySelector('a[href*=".html"]') || tr.querySelector('a[href*=".html"]');
+if (!a) return;
+var href = (a.getAttribute('href') || '').split('#')[0];
+var title = cleanTitle(textOf(a)) || cleanTitle(textOf(titleCell));
+if (!title) return;
+push(date, title, href, cleanTitle(textOf(infoCell)));
 });
+if (!out.length) {
+nodeList('a[href*="#continue"]', doc).forEach(function (a) {
+var row = a.closest ? (a.closest('tr') || a.closest('li')) : null;
+if (!row) return;
+var ta = row.querySelector('a[href*=".html"]');
+if (!ta) return;
+var tds = row.querySelectorAll('td');
+push(tds.length ? cleanTitle(textOf(tds[0])) : '', cleanTitle(textOf(ta)) || cleanTitle(textOf(row)),
+ta.getAttribute('href'), tds.length ? cleanTitle(textOf(tds[tds.length - 1])) : '');
+});
+}
 } catch (e) {}
 return out;
 }
@@ -264,6 +294,7 @@ else cb(true);
 }
 function apiCard(rel, cb, fail) {
 getText(rel, { method: 'GET' }, function (html) {
+if (isBadHtml(html)) { fail(new Error(badHtmlHint(html))); return; }
 var doc = new DOMParser().parseFromString(html, 'text/html');
 var m = rel.match(/\/(\d+)-/);
 var pid = doc.querySelector('input#post_id');
@@ -271,6 +302,10 @@ var title = textOf(doc.querySelector('h1')) ||
 textOf(doc.querySelector('.b-post__title')) ||
 (doc.querySelector('meta[property="og:title"]') ? doc.querySelector('meta[property="og:title"]').getAttribute('content') || '' : '') ||
 cleanTitle((htmlTitle(html) || '').replace(/[-|].*$/, ''));
+if (!title) {
+var mh = html.match(/<h1[^>]*>([\s\S]{0,200}?)<\/h1>/i);
+if (mh) title = cleanTitle(stripTags(mh[1]));
+}
 var posterEl = doc.querySelector('.b-post__poster img') || doc.querySelector('img.b-post__image') ||
 doc.querySelector('meta[property="og:image"]') || doc.querySelector('link[rel="image_src"]');
 var poster = posterEl ? absUrl(posterEl.getAttribute('src') || posterEl.getAttribute('content') || posterEl.getAttribute('href') || '') : '';
@@ -280,29 +315,62 @@ nodeList('ul#translators-list li[data-translator_id], ul#translator-list li[data
 var id = li.getAttribute('data-translator_id'), t = textOf(li);
 if (id && t && !seen[id]) { seen[id] = 1; translators.push({ id: id, title: t }); }
 });
-var seasons = nodeList('ul#simple-seasons-tabs li[data-season], li.b-simple_season__item[data-tab_id]', doc).map(function (li) {
+if (!translators.length) {
+var re = /data-translator_id=["']?(\d+)["']?[^>]*>\s*([^<]{1,60})</g, mm;
+while ((mm = re.exec(html)) !== null) {
+if (!seen[mm[1]] && cleanTitle(mm[2])) { seen[mm[1]] = 1; translators.push({ id: mm[1], title: cleanTitle(mm[2]) }); }
+}
+}
+var seasons = nodeList('ul#simple-seasons-tabs li[data-season], li.b-simple_season__item[data-tab_id], li[data-season]', doc).map(function (li) {
 return { id: li.getAttribute('data-season') || li.getAttribute('data-tab_id'), title: textOf(li) };
 });
-if (!title || title === 'Без названия') {
-log('card parse empty, html head:', snippet(html, 200));
-Lampa.Noty.show('Rezka card: парсер не нашёл заголовок. HTML: ' + snippet(html, 60));
+if (!seasons.length) {
+var rs = /data-season=["']?(\d+)["']?/g, ms, uniq = {};
+while ((ms = rs.exec(html)) !== null) if (!uniq[ms[1]]) { uniq[ms[1]] = 1; seasons.push({ id: ms[1], title: ms[1] + ' сезон' }); }
+seasons.sort(function (a, b) { return a.id - b.id; });
 }
-cb({
+var contentId = pid ? pid.getAttribute('value') : (m ? m[1] : null);
+if (!contentId) {
+var mi = html.match(/data-id=["']?(\d{3,7})["']?/) || html.match(/\bid=["']?(\d{3,7})["']?\s*,\s*translator_id/);
+if (mi) contentId = mi[1];
+}
+var card = {
 rel: rel,
-contentId: pid ? pid.getAttribute('value') : (m ? m[1] : null),
+contentId: contentId,
 title: title || 'Без названия',
 poster: poster,
 descr: textOf(doc.querySelector('.b-post__description')),
 translators: translators,
 seasons: seasons,
-isSerial: rel.indexOf('/series/') >= 0
-});
+isSerial: rel.indexOf('/series/') >= 0,
+_html: html
+};
+if (!title) log('card title fallback used, head:', snippet(html, 200));
+cb(card);
 }, fail);
+}
+function scrapeEpisodesFromHtml(html) {
+var eps = {};
+var re = /<li[^>]*data-episode_id=["']?(\d+)["']?[^>]*>([\s\S]*?<\/li>)/g, m;
+while ((m = re.exec(html)) !== null) {
+var tag = m[0].slice(0, m[0].indexOf('>') + 1);
+var sid = (tag.match(/data-season_id=["']?(\d+)["']?/) || [])[1] || '1';
+if (!eps[sid]) eps[sid] = [];
+eps[sid].push({ id: m[1], title: cleanTitle(stripTags(m[2])) || ('Серия ' + m[1]) });
+}
+return eps;
 }
 function apiSeasonData(card, voiceId, cb, fail) {
 card._sd = card._sd || {};
 if (card._sd[voiceId]) { cb(card._sd[voiceId]); return; }
 var referer = mirror() + card.rel.replace(/^\//, '');
+function fromHtml() {
+var eps = scrapeEpisodesFromHtml(card._html || '');
+var keys = Object.keys(eps).sort(function (a, b) { return a - b; });
+if (!keys.length) return null;
+var seasons = keys.map(function (k) { return { id: k, title: k + ' сезон' }; });
+return { seasons: seasons, episodes: eps };
+}
 getJson(ajaxRel('ajax/get_cdn_series/'), { id: card.contentId, translator_id: voiceId || '', action: 'get_episodes' }, referer, function (d) {
 var sdoc = new DOMParser().parseFromString(d.seasons || '<i></i>', 'text/html');
 var edoc = new DOMParser().parseFromString(d.episodes || '<i></i>', 'text/html');
@@ -320,11 +388,17 @@ Object.keys(eps).sort(function (a, b) { return a - b; }).forEach(function (k) {
 seasons.push({ id: k, title: k + ' сезон' });
 });
 }
+if (!seasons.length) {
+var sd0 = fromHtml();
+if (sd0) { card._sd[voiceId] = sd0; cb(sd0); return; }
+}
 var sd = { seasons: seasons, episodes: eps };
 card._sd[voiceId] = sd;
 cb(sd);
 }, function (e) {
 log('get_episodes failed:', e && e.message);
+var sd0 = fromHtml();
+if (sd0) { card._sd[voiceId] = sd0; cb(sd0); return; }
 var seasons = (card.seasons && card.seasons.length) ? card.seasons : [{ id: '1', title: '1 сезон' }];
 var eps = {}, done = 0;
 seasons.forEach(function (s) {
@@ -373,14 +447,32 @@ var list = decodeRezkaUrl(url), map = {};
 list.forEach(function (q) { map[q.quality] = q.url; });
 return map;
 }
+function streamFromHtml(card) {
+var h = card._html || '';
+var m = h.match(/file:\s*["']([^"']{20,})["']/) ||
+h.match(/initCDN\(\s*["']([^"']{20,})["']/) ||
+h.match(/soCdnJS\s*=\s*{[\s\S]{0,400}?url:\s*["']([^"']{20,})["']/);
+if (!m) return null;
+var q = buildQuality(m[1]);
+return Object.keys(q).length ? q : null;
+}
 function apiStream(card, voiceId, season, episode, cb, fail) {
 var form = { id: card.contentId, translator_id: voiceId || '', action: 'get_stream', favs: '0' };
 if (card.isSerial && season && episode) { form.season = season; form.episode = episode; }
 var referer = mirror() + card.rel.replace(/^\//, '');
 getJson(ajaxRel('ajax/get_cdn_series/'), form, referer, function (data) {
-if (!data || !data.success || !data.url) { fail(new Error((data && data.message) || 'сервер не вернул ссылку')); return; }
+if (!data || !data.success || !data.url) {
+var q0 = streamFromHtml(card);
+if (q0 && !card.isSerial) { cb(q0); return; }
+fail(new Error((data && data.message) || 'сервер не вернул ссылку'));
+return;
+}
 cb(buildQuality(data.url));
-}, fail);
+}, function (e) {
+var q0 = streamFromHtml(card);
+if (q0 && !card.isSerial) { cb(q0); return; }
+fail(e);
+});
 }
 
 // ==================== ПОДБОР КАРТОЧКИ TMDB ↔ REZKA ====================
@@ -530,6 +622,53 @@ Lampa.Player.listener.follow('destroy', onDestroy);
 });
 }
 
+// ==================== NAV / SCROLL HARD-FIX ====================
+function refreshNav(scroll, compName, getLast, interacted) {
+try {
+var act = Lampa.Activity.active();
+if (!act || act.component !== compName) return;
+Lampa.Controller.collectionSet(scroll.render());
+if (!interacted) Lampa.Controller.collectionFocus((getLast && getLast()) || false, scroll.render());
+} catch (e) {}
+}
+function makeController(comp, scroll, getLast, compName) {
+function follow() {
+setTimeout(function () {
+try {
+var f = scroll.render().find('.focus').first();
+if (f.length) scroll.update(f, true);
+} catch (e) {}
+}, 30);
+}
+function manual(dir) {
+try {
+var items = scroll.render().find('.selector');
+var cur = scroll.render().find('.focus').first();
+var i = items.index(cur);
+if (dir === 'down') { if (i >= 0 && i < items.length - 1) { Lampa.Controller.collectionFocus(items.eq(i + 1), scroll.render()); follow(); } }
+else { if (i > 0) { Lampa.Controller.collectionFocus(items.eq(i - 1), scroll.render()); follow(); } else if (i === -1 && items.length) { Lampa.Controller.collectionFocus(items.eq(0), scroll.render()); follow(); } }
+} catch (e) {}
+}
+comp.start = function () {
+Lampa.Controller.add('content', {
+toggle: function () {
+Lampa.Controller.collectionSet(scroll.render());
+Lampa.Controller.collectionFocus(getLast() || false, scroll.render());
+},
+left: function () {
+if (Navigator.canmove('left')) Navigator.move('left');
+else Lampa.Controller.toggle('menu');
+},
+right: function () { if (Navigator.canmove('right')) Navigator.move('right'); else manual('down'); },
+up: function () { if (Navigator.canmove('up')) { Navigator.move('up'); follow(); } else manual('up'); },
+down: function () { if (Navigator.canmove('down')) { Navigator.move('down'); follow(); } else manual('down'); },
+back: function () { Lampa.Activity.backward(); }
+});
+Lampa.Controller.toggle('content');
+};
+comp.stop = function () {};
+}
+
 // ==================== UI: ОБЩИЕ ЭЛЕМЕНТЫ ====================
 function sectionTitle(t) { return $('<div class="rezka-section">' + esc(t) + '</div>'); }
 function cardEl(item, withProgress) {
@@ -546,10 +685,11 @@ if (item.episode) el.append('<div class="rezka-card__ep">S' + item.season + ' E'
 }
 return el;
 }
-function rowEl(item) {
-return $('<div class="rezka-ep selector">' +
-'<div class="rezka-ep__num">' + esc(item.title) + '</div>' +
-'<div class="rezka-ep__info">' + esc(item.info || '') + '</div></div>');
+function continueHeadEl() {
+return $('<div class="rezka-cont rezka-cont--head">' +
+'<div class="rezka-cont__date">Дата</div>' +
+'<div class="rezka-cont__title">Название</div>' +
+'<div class="rezka-cont__info">Последняя информация</div></div>');
 }
 function continueRowEl(item) {
 return $('<div class="rezka-cont selector">' +
@@ -571,35 +711,6 @@ card_url: it.url, resume: resume ? it : undefined, page: 1
 }
 function btnEl(label) { return $('<div class="rezka-btn selector">' + esc(label) + '</div>'); }
 
-function makeController(comp, scroll, getLast) {
-function follow() {
-setTimeout(function () {
-try {
-var f = scroll.render().find('.focus').first();
-if (f.length) scroll.update(f, true);
-} catch (e) {}
-}, 30);
-}
-comp.start = function () {
-Lampa.Controller.add('content', {
-toggle: function () {
-Lampa.Controller.collectionSet(scroll.render());
-Lampa.Controller.collectionFocus(getLast() || false, scroll.render());
-},
-left: function () {
-if (Navigator.canmove('left')) Navigator.move('left');
-else Lampa.Controller.toggle('menu');
-},
-right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
-up: function () { if (Navigator.canmove('up')) { Navigator.move('up'); follow(); } },
-down: function () { if (Navigator.canmove('down')) { Navigator.move('down'); follow(); } },
-back: function () { Lampa.Activity.backward(); }
-});
-Lampa.Controller.toggle('content');
-};
-comp.stop = function () {};
-}
-
 // ==================== ЭКРАН: ГЛАВНЫЙ ====================
 var SECTIONS = [
 { key: 'films', title: 'Фильмы', path: 'films/' },
@@ -614,8 +725,10 @@ var HOME_ROWS = [
 ];
 function RezkaMain(object) {
 var scroll = new Lampa.Scroll({ mask: true, over: true });
-var last = false, inited = false;
-function setLast(el) { last = el; }
+var last = false, inited = false, interacted = false;
+var self = this;
+function setLast(el) { last = el; interacted = true; }
+function nav() { refreshNav(scroll, COMP_MAIN, function () { return last; }, interacted); }
 function openSearch() {
 if (Lampa.Search && Lampa.Search.open) {
 Lampa.Search.open({ onBack: function () { Lampa.Controller.toggle('content'); } });
@@ -627,23 +740,27 @@ function fillRow(grid, rel, limit) {
 getText(rel, { method: 'GET' }, function (html) {
 if (!inited) return;
 grid.empty();
+if (isBadHtml(html)) { grid.append('<div class="rezka-note">' + esc(badHtmlHint(html)) + '</div>'); nav(); return; }
 var items = parseList(html).slice(0, limit);
-if (!items.length) { grid.append('<div class="rezka-note">Пусто</div>'); return; }
+if (!items.length) { grid.append('<div class="rezka-note">Пусто</div>'); nav(); return; }
 items.forEach(function (it) {
 var el = cardEl(it, false);
 bindCard(el, it, scroll, setLast, false);
 grid.append(el);
 });
+nav();
 }, function () {
-if (inited) grid.html('<div class="rezka-note">Ошибка загрузки ленты</div>');
+if (inited) { grid.html('<div class="rezka-note">Ошибка загрузки ленты</div>'); nav(); }
 });
 }
 function fillContinue(grid) {
 getText('continue/', { method: 'GET' }, function (html) {
 if (!inited) return;
 grid.empty();
-var items = parseContinue(html).slice(0, 12);
-if (!items.length) { grid.append('<div class="rezka-note">На rezka нет начатых просмотров</div>'); return; }
+if (isBadHtml(html)) { grid.append('<div class="rezka-note">' + esc(badHtmlHint(html)) + '</div>'); nav(); return; }
+var items = parseContinue(html).slice(0, 15);
+if (!items.length) { grid.append('<div class="rezka-note">На rezka нет начатых просмотров</div>'); nav(); return; }
+grid.append(continueHeadEl());
 items.forEach(function (it) {
 var el = continueRowEl(it);
 el.on('hover:focus', function () { setLast(el); scroll.update(el, true); });
@@ -655,8 +772,9 @@ card_url: it.url, resume: it, page: 1
 });
 grid.append(el);
 });
+nav();
 }, function () {
-if (inited) grid.html('<div class="rezka-note">«Досмотреть» недоступно (нужна авторизация rezka)</div>');
+if (inited) { grid.html('<div class="rezka-note">«Досмотреть» недоступно (нужна авторизация rezka)</div>'); nav(); }
 });
 }
 function build() {
@@ -696,14 +814,14 @@ scroll.append(sectionTitle('Каталог Rezka'));
 var btns = $('<div class="rezka-btns"></div>');
 SECTIONS.forEach(function (sec) {
 var b = btnEl(sec.title);
-b.on('hover:focus', function () { last = b; scroll.update(b, true); });
+b.on('hover:focus', function () { setLast(b); scroll.update(b, true); });
 b.on('hover:enter', function () {
 Lampa.Activity.push({ url: '', title: sec.title, component: COMP_LIST, section: sec.path, page: 1 });
 });
 btns.append(b);
 });
 var bs = btnEl('Поиск');
-bs.on('hover:focus', function () { last = bs; scroll.update(bs, true); });
+bs.on('hover:focus', function () { setLast(bs); scroll.update(bs, true); });
 bs.on('hover:enter', openSearch);
 btns.append(bs);
 scroll.append(btns);
@@ -717,19 +835,21 @@ fillRow(grid, row.rel, row.limit);
 if (!jarHasAuth()) {
 scroll.append($('<div class="rezka-note">Нет авторизации: Настройки → HDREZKA → «Cookies вручную» или «Войти на rezka».</div>'));
 }
+nav();
 }
 this.create = function () { inited = true; build(); return this.render(); };
 this.destroy = function () { inited = false; scroll.destroy(); };
 this.render = function () { return scroll.render(); };
 this.empty = function () {};
-makeController(this, scroll, function () { return last; });
+makeController(this, scroll, function () { return last; }, COMP_MAIN);
 }
 
 // ==================== ЭКРАН: СПИСОК ====================
 function RezkaList(object) {
 var scroll = new Lampa.Scroll({ mask: true, over: true });
-var last = false, page = object.page || 1, inited = false;
-function setLast(el) { last = el; }
+var last = false, page = object.page || 1, inited = false, interacted = false;
+function setLast(el) { last = el; interacted = true; }
+function nav() { refreshNav(scroll, COMP_LIST, function () { return last; }, interacted); }
 function rel() {
 if (object.search) return searchRel(object.search, page);
 var base = object.section || 'films/';
@@ -741,8 +861,9 @@ scroll.append(sectionTitle('Загрузка…'));
 getText(rel(), { method: 'GET' }, function (html) {
 if (!inited) return;
 scroll.clear();
+if (isBadHtml(html)) { scroll.append(sectionTitle(badHtmlHint(html))); nav(); return; }
 var items = parseList(html);
-if (!items.length) { scroll.append(sectionTitle('Ничего не найдено')); return; }
+if (!items.length) { scroll.append(sectionTitle('Ничего не найдено')); nav(); return; }
 var grid = $('<div class="rezka-grid"></div>');
 items.forEach(function (it) {
 var el = cardEl(it, false);
@@ -752,29 +873,32 @@ grid.append(el);
 scroll.append(grid);
 if (hasNextPage(html, page + 1)) {
 var next = btnEl('Следующая страница (' + (page + 1) + ')');
-next.on('hover:focus', function () { last = next; scroll.update(next, true); });
+next.on('hover:focus', function () { setLast(next); scroll.update(next, true); });
 next.on('hover:enter', function () { page++; load(); });
 scroll.append(next);
 }
+nav();
 }, function (e) {
 if (!inited) return;
 scroll.clear();
 scroll.append(sectionTitle('Ошибка: ' + (e && e.message ? e.message : 'загрузки')));
+nav();
 });
 }
 this.create = function () { inited = true; load(); return this.render(); };
 this.destroy = function () { inited = false; scroll.destroy(); };
 this.render = function () { return scroll.render(); };
 this.empty = function () {};
-makeController(this, scroll, function () { return last; });
+makeController(this, scroll, function () { return last; }, COMP_LIST);
 }
 
 // ==================== ЭКРАН: КАРТОЧКА ====================
 function RezkaCard(object) {
 var scroll = new Lampa.Scroll({ mask: true, over: true });
-var last = false, inited = false;
+var last = false, inited = false, interacted = false;
 var card = null, voiceIdx = 0, seasonId = '', episodes = [];
-function setLast(el) { last = el; }
+function setLast(el) { last = el; interacted = true; }
+function nav() { refreshNav(scroll, COMP_CARD, function () { return last; }, interacted); }
 function pickVoice() {
 if (!card || !card.translators.length) return;
 var pref = stGet('last_voice', '');
@@ -820,7 +944,7 @@ scroll.append($('<div class="rezka-head">' +
 var btns = $('<div class="rezka-btns"></div>');
 var hist = histGet().filter(function (h) { return h.url === card.rel; })[0];
 var bPlay = btnEl(card.isSerial ? (hist ? ('Продолжить S' + hist.season + ' E' + hist.episode) : 'Смотреть') : 'Смотреть');
-bPlay.on('hover:focus', function () { last = bPlay; scroll.update(bPlay, true); });
+bPlay.on('hover:focus', function () { setLast(bPlay); scroll.update(bPlay, true); });
 bPlay.on('hover:enter', function () {
 ensureAuth(function () {
 if (!card.isSerial) { playMovie(); return; }
@@ -837,7 +961,7 @@ if (ep) playEpisode(ep); else Lampa.Noty.show('Rezka: нет серий');
 btns.append(bPlay);
 if (card.translators.length) {
 var bV = btnEl('Озвучка: ' + curVoice().title);
-bV.on('hover:focus', function () { last = bV; scroll.update(bV, true); });
+bV.on('hover:focus', function () { setLast(bV); scroll.update(bV, true); });
 bV.on('hover:enter', function () {
 Lampa.Select.show({
 title: 'Озвучка',
@@ -855,7 +979,7 @@ btns.append(bV);
 }
 if (card.seasons.length > 1) {
 var bS = btnEl('Сезон: ' + (seasonId || card.seasons[0].id));
-bS.on('hover:focus', function () { last = bS; scroll.update(bS, true); });
+bS.on('hover:focus', function () { setLast(bS); scroll.update(bS, true); });
 bS.on('hover:enter', function () {
 Lampa.Select.show({
 title: 'Сезон',
@@ -873,7 +997,7 @@ btns.append(bS);
 scroll.append(btns);
 if (card.isSerial) {
 scroll.append(sectionTitle('Серии'));
-if (!episodes.length) { scroll.append($('<div class="rezka-note">Серии не загрузились</div>')); return; }
+if (!episodes.length) { scroll.append($('<div class="rezka-note">Серии не загрузились</div>')); nav(); return; }
 episodes.forEach(function (ep) {
 var meta = baseMeta(); meta.episode = ep.id;
 var p = percentOf(meta);
@@ -881,7 +1005,7 @@ var row = $('<div class="rezka-ep selector">' +
 '<div class="rezka-ep__num">' + esc(ep.title || ('Серия ' + ep.id)) + '</div>' +
 '<div class="rezka-ep__bar"><div style="width:' + p + '%"></div></div>' +
 '<div class="rezka-ep__pct">' + (p ? Math.round(p) + '%' : '') + '</div></div>');
-row.on('hover:focus', function () { last = row; scroll.update(row, true); });
+row.on('hover:focus', function () { setLast(row); scroll.update(row, true); });
 row.on('hover:enter', function () { ensureAuth(function () { playEpisode(ep); }); });
 row.on('hover:long', function () {
 Lampa.Select.show({
@@ -899,6 +1023,7 @@ onBack: function () { Lampa.Controller.toggle('content'); }
 scroll.append(row);
 });
 }
+nav();
 }
 this.create = function () {
 inited = true;
@@ -911,17 +1036,17 @@ if (card.isSerial) loadEpisodes(function () { render(); });
 else render();
 };
 if (object.card_url) apiCard(object.card_url, done, function (e) {
-scroll.clear(); scroll.append(sectionTitle('Ошибка: ' + e.message));
+scroll.clear(); scroll.append(sectionTitle('Ошибка: ' + e.message)); nav();
 });
 else if (object.search_title) findOnRezka({ title: object.search_title }, done, function (e) {
-scroll.clear(); scroll.append(sectionTitle('Ошибка: ' + ((e && e.message) || 'поиска')));
+scroll.clear(); scroll.append(sectionTitle('Ошибка: ' + ((e && e.message) || 'поиска'))); nav();
 });
 return this.render();
 };
 this.destroy = function () { inited = false; scroll.destroy(); };
 this.render = function () { return scroll.render(); };
 this.empty = function () {};
-makeController(this, scroll, function () { return last; });
+makeController(this, scroll, function () { return last; }, COMP_CARD);
 }
 
 // ==================== КНОПКА-ИСТОЧНИК В КАРТОЧКЕ LAMPA ====================
@@ -1128,7 +1253,7 @@ Lampa.Template.add('rezka_css', '<style>' +
 '.rezka-section{font-size:1.3em;color:#9a9a9a;margin:1.2em 0 .8em}' +
 '.rezka-note{color:#888;padding:.6em 0}' +
 '.rezka-grid{display:flex;flex-wrap:wrap}' +
-'.rezka-rows{display:flex;flex-direction:column}' +
+'.rezka-rows{display:flex;flex-direction:column;width:100%}' +
 '.rezka-card{width:9.5em;margin:0 1.2em 1.6em 0}' +
 '.rezka-card__poster{width:9.5em;height:14em;background:#1c1c1c;border-radius:.6em;overflow:hidden;position:relative}' +
 '.rezka-card__poster img{width:100%;height:100%;object-fit:cover}' +
@@ -1152,12 +1277,14 @@ Lampa.Template.add('rezka_css', '<style>' +
 '.rezka-ep__bar{flex:1;height:.4em;background:#3a3a3a;border-radius:.2em;margin:0 1em}' +
 '.rezka-ep__bar>div{height:100%;background:#5c86c5;border-radius:.2em}' +
 '.rezka-ep__pct{width:3.5em;text-align:right;color:#8a8a8a}' +
-// UI fix for Continue watching 3-column table
-'.rezka-cont{display:flex;align-items:center;padding:.9em 1.2em;background:#232323;border-radius:.6em;margin-bottom:.6em}' +
+// «Досмотреть» = таблица 3 колонки, как на сайте
+'.rezka-cont{display:flex;align-items:center;width:100%;padding:.8em 1.2em;background:#232323;border-radius:.6em;margin-bottom:.5em;box-sizing:border-box}' +
 '.rezka-cont.focus{box-shadow:0 0 0 .2em #fff}' +
-'.rezka-cont__date{width:8em;color:#8a8a8a;flex-shrink:0;text-align:left}' +
-'.rezka-cont__title{flex:1;margin:0 1em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#fff}' +
-'.rezka-cont__info{width:12em;text-align:right;color:#8a8a8a;flex-shrink:0}' +
+'.rezka-cont--head{background:transparent;color:#9a9a9a;padding:.4em 1.2em;margin-bottom:.2em}' +
+'.rezka-cont__date{width:7em;flex-shrink:0;color:#8a8a8a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+'.rezka-cont__title{flex:1;min-width:0;margin:0 1.2em;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+'.rezka-cont__info{width:16em;flex-shrink:0;text-align:right;color:#8a8a8a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+'.rezka-cont--head .rezka-cont__title,.rezka-cont--head .rezka-cont__info{color:#9a9a9a}' +
 '.view--rezka .full-start__button__ico{color:#5c86c5}' +
 '</style>');
 $('body').append(Lampa.Template.get('rezka_css', {}, true));
@@ -1187,7 +1314,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '2.9.0',
+version: '3.0.0',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: озвучки, сезоны, серии, история',
 component: COMP_MAIN,
