@@ -1,9 +1,9 @@
 /**
-HDREZKA for Lampa/Luxo (Apple TV / web / Android / Tizen)
-v3.0.0 — worker v7 compatible (fix "Redirect" stub), continue = real 3-column table
-(date | title | last info, title taken from column-2 link, NOT from #continue badge),
-card/episodes/stream parsers with regex fallbacks from page HTML,
-navigator/scroll hard-fix (manual .selector walk + collection refresh after async fill).
+HDREZKA for Lampa/Luxo — v3.2.0
+FIX: page scroll (layer--wheight wrapper, как в официальных компонентах lampa-source),
+continue-парсер независим от table/div, dbg-диагностика заглушки «Redirect»,
+навигация с ручным fallback по .selector.
+Worker: v7 (без изменений).
 */
 (function () {
 'use strict';
@@ -82,10 +82,23 @@ return false;
 function badHtmlHint(html) {
 var t = snippet(html, 40);
 if (/^\s*redirect/i.test(String(html || '')))
-return 'воркер вернул заглушку «Redirect» — обновите Cloudflare Worker до v7';
+return 'воркер вернул заглушку «Redirect»: rezka не пропускает без cookies анти-бота — вставьте cookies браузера в «Cookies вручную» (dbg ниже)';
 if (/<title[^>]*>\s*(ВХОД|Вход|Login)/i.test(String(html || '')))
 return 'rezka отдала страницу входа — вставьте cookies браузера в «Cookies вручную»';
-return 'пустой/битый ответ («' + t + '») — проверьте Worker v7 и cookies';
+return 'пустой/битый ответ («' + t + '»)';
+}
+// dbg-диагностика: спрашиваем worker, что именно вернула rezka
+function diagStub(rel, cb) {
+if (transportMode() !== 'proxy') { cb(''); return; }
+try {
+fetch(proxyUrl() + '?r=' + encodeURIComponent(rel) + '&m=' + encodeURIComponent(mirror()) + '&dbg=1', {
+headers: { 'X-Rezka-Cookie': jarGet() }
+}).then(function (r) { return r.json(); }).then(function (d) {
+cb('dbg: status ' + d.status + ', hops ' + ((d.hops || []).length) +
+', cookies rezka: ' + ((d.setCookies || []).join(',') || 'нет') +
+', body: ' + snippet(String(d.bodyHead || ''), 70));
+}).catch(function () { cb(''); });
+} catch (e) { cb(''); }
 }
 
 // ==================== COOKIE-JAR ====================
@@ -218,50 +231,69 @@ order.forEach(function (k) { var o = map[k]; if (o.title || o.poster) out.push(o
 return out;
 }
 
-// /continue/ — ТАБЛИЦА: [Дата] [Название+ссылка] [Последняя информация]
-// #continue может висеть на бейдже «смотреть ещё N серий», поэтому title берём
-// из ссылки 2-й колонки, а не из текста #continue-янкоря.
+// /continue/ — структурно-независимо: table ИЛИ div-строки.
+// Название берём из ссылки .html (НЕ из бейджа «смотреть ещё N серий»),
+// дата — первое дата-подобное значение строки, инфо — остаток строки (как 3-я колонка сайта).
 function parseContinue(html) {
 var out = [], seen = {};
+var BADGE = /смотреть\s+ещё|watch\s+more/i;
+var DATERE = /\b\d{1,2}[.-]\d{1,2}[.-]\d{2,4}\b|вчера|сегодня|today|yesterday/i;
 function push(date, title, href, info) {
 var key = relOf(href);
 if (!key || key.indexOf('.html') < 0 || seen[key]) return;
+var t = cleanTitle(title);
+if (!t || BADGE.test(t)) return;
 seen[key] = 1;
 var se = info.match(/(\d+)\s*(?:сезон|season)/i);
 var ep = info.match(/(\d+)\s*(?:серия|episode|сер\.)/i);
 out.push({
-url: key, title: title, date: date, info: info,
+url: key, title: t, date: cleanTitle(date), info: cleanTitle(info),
 season: se ? se[1] : '', episode: ep ? ep[1] : '',
 poster: '', type: key.indexOf('/series/') >= 0 ? 'serial' : 'movie'
 });
 }
+function fromRow(row) {
+if (!row) return;
+var anchors = nodeList('a[href*=".html"]', row);
+if (!anchors.length) return;
+var tds = row.querySelectorAll('td');
+var titleA = null, i;
+for (i = 0; i < anchors.length; i++) {
+var at = cleanTitle(textOf(anchors[i]));
+if (at && !BADGE.test(at)) { titleA = anchors[i]; break; }
+}
+if (!titleA) return;
+var href = (titleA.getAttribute('href') || '').split('#')[0];
+var title = cleanTitle(textOf(titleA));
+var date = '', info = '';
+if (tds.length >= 2) {
+date = textOf(tds[0]);
+info = textOf(tds[tds.length - 1]);
+if (BADGE.test(title)) title = cleanTitle(textOf(tds[tds.length >= 3 ? 1 : 0]));
+} else {
+var rowText = cleanTitle(textOf(row));
+var dm = rowText.match(DATERE);
+date = dm ? dm[0] : '';
+info = rowText.replace(title, '').replace(date, '').replace(/\s+/g, ' ').trim();
+}
+push(date, title, href, info);
+}
+function rowOf(a) {
+if (!a.closest) return null;
+return a.closest('tr') || a.closest('li') ||
+a.closest('[class*="item"]') || a.closest('[class*="row"]') || a.closest('[class*="line"]');
+}
 try {
 var doc = new DOMParser().parseFromString(html, 'text/html');
 var rows = nodeList('table tr', doc);
-if (!rows.length) rows = nodeList('[class*="continue"] tr, [class*="continue"] li', doc);
-rows.forEach(function (tr) {
-var tds = tr.querySelectorAll('td');
-if (tds.length < 2) return;
-var date = cleanTitle(textOf(tds[0]));
-if (/^дата$/i.test(date)) return;
-var titleCell = tds.length >= 3 ? tds[1] : tds[0];
-var infoCell = tds[tds.length - 1];
-var a = titleCell.querySelector('a[href*=".html"]') || tr.querySelector('a[href*=".html"]');
-if (!a) return;
-var href = (a.getAttribute('href') || '').split('#')[0];
-var title = cleanTitle(textOf(a)) || cleanTitle(textOf(titleCell));
-if (!title) return;
-push(date, title, href, cleanTitle(textOf(infoCell)));
-});
+if (rows.length) rows.forEach(fromRow);
 if (!out.length) {
-nodeList('a[href*="#continue"]', doc).forEach(function (a) {
-var row = a.closest ? (a.closest('tr') || a.closest('li')) : null;
-if (!row) return;
-var ta = row.querySelector('a[href*=".html"]');
-if (!ta) return;
-var tds = row.querySelectorAll('td');
-push(tds.length ? cleanTitle(textOf(tds[0])) : '', cleanTitle(textOf(ta)) || cleanTitle(textOf(row)),
-ta.getAttribute('href'), tds.length ? cleanTitle(textOf(tds[tds.length - 1])) : '');
+var handled = [];
+nodeList('a[href*=".html"]', doc).forEach(function (a) {
+var row = rowOf(a);
+if (!row || handled.indexOf(row) >= 0) return;
+handled.push(row);
+fromRow(row);
 });
 }
 } catch (e) {}
@@ -294,7 +326,11 @@ else cb(true);
 }
 function apiCard(rel, cb, fail) {
 getText(rel, { method: 'GET' }, function (html) {
-if (isBadHtml(html)) { fail(new Error(badHtmlHint(html))); return; }
+if (isBadHtml(html)) {
+var msg = badHtmlHint(html);
+diagStub(rel, function (d) { fail(new Error(msg + (d ? ' | ' + d : ''))); });
+return;
+}
 var doc = new DOMParser().parseFromString(html, 'text/html');
 var m = rel.match(/\/(\d+)-/);
 var pid = doc.querySelector('input#post_id');
@@ -334,19 +370,12 @@ if (!contentId) {
 var mi = html.match(/data-id=["']?(\d{3,7})["']?/) || html.match(/\bid=["']?(\d{3,7})["']?\s*,\s*translator_id/);
 if (mi) contentId = mi[1];
 }
-var card = {
-rel: rel,
-contentId: contentId,
-title: title || 'Без названия',
-poster: poster,
+cb({
+rel: rel, contentId: contentId, title: title || 'Без названия', poster: poster,
 descr: textOf(doc.querySelector('.b-post__description')),
-translators: translators,
-seasons: seasons,
-isSerial: rel.indexOf('/series/') >= 0,
-_html: html
-};
-if (!title) log('card title fallback used, head:', snippet(html, 200));
-cb(card);
+translators: translators, seasons: seasons,
+isSerial: rel.indexOf('/series/') >= 0, _html: html
+});
 }, fail);
 }
 function scrapeEpisodesFromHtml(html) {
@@ -368,8 +397,7 @@ function fromHtml() {
 var eps = scrapeEpisodesFromHtml(card._html || '');
 var keys = Object.keys(eps).sort(function (a, b) { return a - b; });
 if (!keys.length) return null;
-var seasons = keys.map(function (k) { return { id: k, title: k + ' сезон' }; });
-return { seasons: seasons, episodes: eps };
+return { seasons: keys.map(function (k) { return { id: k, title: k + ' сезон' }; }), episodes: eps };
 }
 getJson(ajaxRel('ajax/get_cdn_series/'), { id: card.contentId, translator_id: voiceId || '', action: 'get_episodes' }, referer, function (d) {
 var sdoc = new DOMParser().parseFromString(d.seasons || '<i></i>', 'text/html');
@@ -475,7 +503,7 @@ fail(e);
 });
 }
 
-// ==================== ПОДБОР КАРТОЧКИ TMDB ↔ REZKA ====================
+// ==================== ПОДБОР КАРТОЧКИ ====================
 function scoreOf(item, titles, year) {
 var t = norm(item.title), best = 0;
 titles.forEach(function (tt) {
@@ -622,7 +650,14 @@ Lampa.Player.listener.follow('destroy', onDestroy);
 });
 }
 
-// ==================== NAV / SCROLL HARD-FIX ====================
+// ==================== NAV / SCROLL (как в lampa-source) ====================
+// Обёртка с layer--wheight даёт .scroll высоту экрана — без этого
+// maxOffset()=0 и scroll.update() не может прокрутить страницу (курсор уходит за экран).
+function pageWrap(scroll) {
+var w = $('<div class="rezka-page layer--wheight"></div>');
+w.append(scroll.render());
+return w;
+}
 function refreshNav(scroll, compName, getLast, interacted) {
 try {
 var act = Lampa.Activity.active();
@@ -631,7 +666,7 @@ Lampa.Controller.collectionSet(scroll.render());
 if (!interacted) Lampa.Controller.collectionFocus((getLast && getLast()) || false, scroll.render());
 } catch (e) {}
 }
-function makeController(comp, scroll, getLast, compName) {
+function makeController(comp, scroll, getLast) {
 function follow() {
 setTimeout(function () {
 try {
@@ -659,7 +694,7 @@ left: function () {
 if (Navigator.canmove('left')) Navigator.move('left');
 else Lampa.Controller.toggle('menu');
 },
-right: function () { if (Navigator.canmove('right')) Navigator.move('right'); else manual('down'); },
+right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
 up: function () { if (Navigator.canmove('up')) { Navigator.move('up'); follow(); } else manual('up'); },
 down: function () { if (Navigator.canmove('down')) { Navigator.move('down'); follow(); } else manual('down'); },
 back: function () { Lampa.Activity.backward(); }
@@ -669,7 +704,7 @@ Lampa.Controller.toggle('content');
 comp.stop = function () {};
 }
 
-// ==================== UI: ОБЩИЕ ЭЛЕМЕНТЫ ====================
+// ==================== UI ====================
 function sectionTitle(t) { return $('<div class="rezka-section">' + esc(t) + '</div>'); }
 function cardEl(item, withProgress) {
 var metaLine = item.info || (item.year ? item.year : '');
@@ -724,9 +759,9 @@ var HOME_ROWS = [
 { title: 'Популярное на rezka', rel: 'new/?filter=popular', limit: 12 }
 ];
 function RezkaMain(object) {
-var scroll = new Lampa.Scroll({ mask: true, over: true });
+var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
+var wrap = pageWrap(scroll);
 var last = false, inited = false, interacted = false;
-var self = this;
 function setLast(el) { last = el; interacted = true; }
 function nav() { refreshNav(scroll, COMP_MAIN, function () { return last; }, interacted); }
 function openSearch() {
@@ -757,7 +792,11 @@ function fillContinue(grid) {
 getText('continue/', { method: 'GET' }, function (html) {
 if (!inited) return;
 grid.empty();
-if (isBadHtml(html)) { grid.append('<div class="rezka-note">' + esc(badHtmlHint(html)) + '</div>'); nav(); return; }
+if (isBadHtml(html)) {
+grid.append('<div class="rezka-note">' + esc(badHtmlHint(html)) + '</div>');
+diagStub('continue/', function (d) { if (d && inited) grid.append('<div class="rezka-note">' + esc(d) + '</div>'); });
+nav(); return;
+}
 var items = parseContinue(html).slice(0, 15);
 if (!items.length) { grid.append('<div class="rezka-note">На rezka нет начатых просмотров</div>'); nav(); return; }
 grid.append(continueHeadEl());
@@ -839,14 +878,15 @@ nav();
 }
 this.create = function () { inited = true; build(); return this.render(); };
 this.destroy = function () { inited = false; scroll.destroy(); };
-this.render = function () { return scroll.render(); };
+this.render = function () { return wrap; };
 this.empty = function () {};
-makeController(this, scroll, function () { return last; }, COMP_MAIN);
+makeController(this, scroll, function () { return last; });
 }
 
 // ==================== ЭКРАН: СПИСОК ====================
 function RezkaList(object) {
-var scroll = new Lampa.Scroll({ mask: true, over: true });
+var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
+var wrap = pageWrap(scroll);
 var last = false, page = object.page || 1, inited = false, interacted = false;
 function setLast(el) { last = el; interacted = true; }
 function nav() { refreshNav(scroll, COMP_LIST, function () { return last; }, interacted); }
@@ -887,14 +927,15 @@ nav();
 }
 this.create = function () { inited = true; load(); return this.render(); };
 this.destroy = function () { inited = false; scroll.destroy(); };
-this.render = function () { return scroll.render(); };
+this.render = function () { return wrap; };
 this.empty = function () {};
-makeController(this, scroll, function () { return last; }, COMP_LIST);
+makeController(this, scroll, function () { return last; });
 }
 
 // ==================== ЭКРАН: КАРТОЧКА ====================
 function RezkaCard(object) {
-var scroll = new Lampa.Scroll({ mask: true, over: true });
+var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
+var wrap = pageWrap(scroll);
 var last = false, inited = false, interacted = false;
 var card = null, voiceIdx = 0, seasonId = '', episodes = [];
 function setLast(el) { last = el; interacted = true; }
@@ -1044,12 +1085,12 @@ scroll.clear(); scroll.append(sectionTitle('Ошибка: ' + ((e && e.message) 
 return this.render();
 };
 this.destroy = function () { inited = false; scroll.destroy(); };
-this.render = function () { return scroll.render(); };
+this.render = function () { return wrap; };
 this.empty = function () {};
-makeController(this, scroll, function () { return last; }, COMP_CARD);
+makeController(this, scroll, function () { return last; });
 }
 
-// ==================== КНОПКА-ИСТОЧНИК В КАРТОЧКЕ LAMPA ====================
+// ==================== КНОПКА В КАРТОЧКЕ LAMPA ====================
 function addFullButton(render, movie) {
 try {
 if (!render || !render.length) return;
@@ -1071,8 +1112,7 @@ Lampa.Controller.toggle('content');
 });
 var anchor = render.find('.view--torrent');
 if (anchor.length) anchor.after(btn); else cont.append(btn);
-log('full button injected');
-} catch (e) { log('full button error', e.message); }
+} catch (e) {}
 }
 function registerFullButton() {
 Lampa.Listener.follow('full', function (e) {
@@ -1089,7 +1129,7 @@ if (a && a.component === 'full') addFullButton(a.activity.render(), a.card || a.
 }, 1200);
 }
 
-// ==================== ПОИСК: ИСТОЧНИК В ЯДРЕ ====================
+// ==================== ПОИСК ====================
 function registerSearchSource() {
 if (!Lampa.Search || !Lampa.Search.addSource || window.rezka_search_added) return;
 window.rezka_search_added = true;
@@ -1134,13 +1174,7 @@ function textParam(name, title, descr, opts) {
 opts = opts || {};
 Lampa.SettingsApi.addParam({
 component: 'rezka',
-param: {
-name: name,
-type: 'input',
-values: '',
-default: '',
-placeholder: opts.mask ? '' : '— не задано —'
-},
+param: { name: name, type: 'input', values: '', default: '', placeholder: opts.mask ? '' : '— не задано —' },
 field: { name: title, description: descr },
 onRender: function (item) {
 if (opts.mask) {
@@ -1165,20 +1199,13 @@ component: 'rezka',
 name: 'HDREZKA',
 icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 6.5 6 3.5-6 3.5v-7z"/></svg>'
 });
-textParam('rezka_proxy', 'Прокси (Worker)',
-'Адрес вашего Cloudflare Worker, например https://xxx.workers.dev/',
-{ set: function (v) { stSet('proxy', v); } });
-textParam('rezka_mirror', 'Зеркало rezka',
-'Актуальный домен, например https://rezka.fi',
-{ set: function (v) { stSet('mirror', v || 'https://rezka.fi'); } });
-textParam('rezka_email', 'Email / логин rezka',
-'От вашего аккаунта rezka',
-{ set: function (v) { stSet('email', v); } });
-textParam('rezka_password_ui', 'Пароль rezka',
-'Хранится только локально. Редактор всегда открывается пустым — вводите пароль целиком',
+textParam('rezka_proxy', 'Прокси (Worker)', 'Адрес вашего Cloudflare Worker', { set: function (v) { stSet('proxy', v); } });
+textParam('rezka_mirror', 'Зеркало rezka', 'Актуальный домен, например https://rezka.fi', { set: function (v) { stSet('mirror', v || 'https://rezka.fi'); } });
+textParam('rezka_email', 'Email / логин rezka', 'От вашего аккаунта rezka', { set: function (v) { stSet('email', v); } });
+textParam('rezka_password_ui', 'Пароль rezka', 'Хранится локально; редактор открывается пустым',
 { mask: true, get: function () { return stGet('password', ''); }, set: function (v) { stSet('password', v); } });
 textParam('rezka_cookies_ui', 'Cookies вручную (необязательно)',
-'Строка cookie из браузера: PHPSESSID=…; dle_user_id=…; dle_password=…',
+'ПОЛНАЯ строка cookie из браузера (включая служебные анти-бот): PHPSESSID=…; dle_user_id=…; dle_password=…',
 { mask: true, get: function () { return stGet('cookies', ''); }, set: function (v) { stSet('cookies', v); } });
 Lampa.SettingsApi.addParam({
 component: 'rezka',
@@ -1188,29 +1215,8 @@ onChange: function (v) { stSet('transport', v); }
 });
 Lampa.SettingsApi.addParam({
 component: 'rezka',
-param: { name: 'rezka_reset_btn', type: 'button', default: '' },
-field: { name: 'Сбросить секреты', description: 'Стирает email, пароль и cookies из хранилища' },
-onChange: function () {
-stSet('email', ''); stSet('password', ''); stSet('cookies', '');
-try { Lampa.Storage.set('rezka_password_ui', ''); Lampa.Storage.set('rezka_cookies_ui', ''); } catch (e) {}
-Lampa.Noty.show('Секреты сброшены — введите заново');
-try { Lampa.Settings.update(); } catch (e) {}
-}
-});
-Lampa.SettingsApi.addParam({
-component: 'rezka',
-param: { name: 'rezka_diag_btn', type: 'button', default: '' },
-field: { name: 'Диагностика входа', description: 'Показывает, что сохранено и каким транспортом пойдёт запрос' },
-onChange: function () {
-var email = stGet('email', ''), pass = stGet('password', '');
-Lampa.Noty.show('email ' + email.length + ' симв., пароль ' + pass.length + ' симв., jar ' + jarGet().length +
-' симв.' + (jarHasAuth() ? ' (auth есть)' : ' (auth нет)') + ', транспорт ' + transportMode());
-}
-});
-Lampa.SettingsApi.addParam({
-component: 'rezka',
 param: { name: 'rezka_login_btn', type: 'button', default: '' },
-field: { name: 'Войти на rezka', description: 'Отправляет логин/пароль и сохраняет cookies авторизации' },
+field: { name: 'Войти на rezka', description: 'Отправляет логин/пароль и сохраняет cookies' },
 onChange: function () {
 Lampa.Noty.show('Rezka: вход… (' + transportMode() + ')');
 apiLogin(function (ok, err) {
@@ -1250,6 +1256,8 @@ onChange: function () { stSet('history', []); Lampa.Noty.show('История Re
 // ==================== СТИЛИ / МЕНЮ / СТАРТ ====================
 function addCss() {
 Lampa.Template.add('rezka_css', '<style>' +
+'.rezka-page{height:100%}' +
+'.rezka-page>.scroll{height:100%}' +
 '.rezka-section{font-size:1.3em;color:#9a9a9a;margin:1.2em 0 .8em}' +
 '.rezka-note{color:#888;padding:.6em 0}' +
 '.rezka-grid{display:flex;flex-wrap:wrap}' +
@@ -1277,7 +1285,6 @@ Lampa.Template.add('rezka_css', '<style>' +
 '.rezka-ep__bar{flex:1;height:.4em;background:#3a3a3a;border-radius:.2em;margin:0 1em}' +
 '.rezka-ep__bar>div{height:100%;background:#5c86c5;border-radius:.2em}' +
 '.rezka-ep__pct{width:3.5em;text-align:right;color:#8a8a8a}' +
-// «Досмотреть» = таблица 3 колонки, как на сайте
 '.rezka-cont{display:flex;align-items:center;width:100%;padding:.8em 1.2em;background:#232323;border-radius:.6em;margin-bottom:.5em;box-sizing:border-box}' +
 '.rezka-cont.focus{box-shadow:0 0 0 .2em #fff}' +
 '.rezka-cont--head{background:transparent;color:#9a9a9a;padding:.4em 1.2em;margin-bottom:.2em}' +
@@ -1314,7 +1321,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '3.0.0',
+version: '3.2.0',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: озвучки, сезоны, серии, история',
 component: COMP_MAIN,
