@@ -1,11 +1,10 @@
 /**
-HDREZKA for Lampa/Luxo — v4.8.0
-= v4.6 (полностью сохранён: UI, навигация, карусели, init)
-+ 3 патча для воспроизведения:
-  1) для фильмов POST action=get_movie с флагами озвучки (is_camrip/is_ads/is_director)
-  2) сбор camrip/ads/director при парсинге карточки
-  3) buildQuality для mp4 -> mp4:hls:manifest.m3u8 (протокол CDN 2026)
-Worker v10 + локальный прокси v2 без изменений.
+HDREZKA for Lampa/Luxo — v4.9.0
+= v4.8.1 + применённые патчи 4.8.2 (extract URL, sanitize) + history-guard с try/catch
++ НОВОЕ: карта качеств из ответа CDN ("[360p]url or [720p]url or …"), переключение в плеере,
+  настройка стартового качества (Авто=макс), мета-таблица карточки (рейтинги/страна/жанры/…),
+  санитизация meta на границе плеер/плейлист/история (fix cloneS2 stack overflow).
+Worker v10 / локальный прокси v2 — без изменений.
 */
 (function () {
 'use strict';
@@ -354,8 +353,19 @@ fromRow(row);
 return out;
 }
 function htmlTitle(t) { var m = /<title[^>]*>([^<]{0,80})/i.exec(t || ''); return m ? m[1].trim() : ''; }
-
-// [ПАТЧ 1/3] parseCardHtml: сбор флагов ozvuchki (camrip/ads/director)
+function parseCardInfo(doc) {
+var info = {};
+try {
+nodeList('tr', doc).forEach(function (tr) {
+var tds = tr.querySelectorAll('td');
+if (tds.length < 2) return;
+var k = cleanTitle(textOf(tds[0])).replace(/:$/, '');
+var v = cleanTitle(textOf(tds[1]));
+if (k && v && !info[k]) info[k] = v;
+});
+} catch (e) {}
+return info;
+}
 function parseCardHtml(html, rel, base) {
 var doc = new DOMParser().parseFromString(html, 'text/html');
 var m = rel.match(/\/(\d+)-/);
@@ -403,15 +413,11 @@ var contentId = pid ? pid.getAttribute('value') : (m ? m[1] : null);
 if (!contentId) { var mn = html.match(/news_id=["']?(\d{3,7})["']?/); if (mn) contentId = mn[1]; }
 var card_descr = textOf(doc.querySelector('.b-post__description'));
 if (!card_descr) card_descr = (doc.querySelector('meta[property="og:description"]') ? doc.querySelector('meta[property="og:description"]').getAttribute('content') : '') || textOf(doc.querySelector('[class*="descr"]'));
-var user_hash = '';
-var muh = html.match(/name=["']user_hash["']\s+value=["']([^"']+)["']/i) ||
-html.match(/user_hash\s*=\s*["']([a-zA-Z0-9_\-]{6,64})["']/) ||
-html.match(/["']user_hash["']\s*:\s*["']([^"']+)["']/i);
-if (muh) user_hash = muh[1];
 return {
 rel: rel, contentId: contentId, title: title, poster: poster,
 descr: card_descr || '', translators: translators, seasons: seasons,
-isSerial: rel.indexOf('/series/') >= 0, user_hash: user_hash
+info: parseCardInfo(doc),
+isSerial: rel.indexOf('/series/') >= 0, user_hash: ''
 };
 }
 function scrapeEpisodesFromHtml(html) {
@@ -424,6 +430,94 @@ if (!eps[sid]) eps[sid] = [];
 eps[sid].push({ id: m[1], title: cleanTitle(stripTags(m[2])) || ('Серия ' + m[1]) });
 }
 return eps;
+}
+
+// ==================== КАЧЕСТВО (формат CDN 2026: "[360p]url or [720p]url or …") ====================
+function parseQualityList(raw) {
+var map = {};
+if (!raw) return map;
+var re = /\[(\d+p[^\]]*)\]\s*(https?:\/\/[^\s\]]+)/g, m;
+while ((m = re.exec(String(raw))) !== null) map[m[1]] = m[2];
+if (!Object.keys(map).length) {
+var single = String(raw).match(/https?:\/\/[^\s"']+/);
+if (single) map[/\.m3u8/.test(single[0]) ? 'AUTO' : '1080p'] = single[0];
+}
+return map;
+}
+function pickInitial(map) {
+var pref = stGet('quality', 'auto');
+if (map[pref]) return map[pref];
+var nums = Object.keys(map).filter(function (k) { return /^\d+p/.test(k); })
+.sort(function (a, b) { return parseInt(b, 10) - parseInt(a, 10); });
+if (nums.length) return map[nums[0]];
+var any = Object.keys(map);
+return any.length ? map[any[0]] : '';
+}
+function decodeRezkaUrl(encoded) {
+var urls = [];
+if (!encoded) return urls;
+if (/^https?:/.test(encoded)) {
+var q0 = /(\d{3,4})p/.exec(encoded);
+return [{ url: encoded, quality: /\.m3u8/.test(encoded) ? 'AUTO' : (q0 ? q0[1] + 'p' : '1080p') }];
+}
+var str = encoded.replace(/\/\/_\/\//g, '|').replace(/#/g, '').replace(/[^A-Za-z0-9+/=|]/g, '');
+var parts = str.split('|').filter(function (p) { return p.length > 5; });
+function tryPart(part) {
+try {
+var dec = atob(part.padEnd(Math.ceil(part.length / 4) * 4, '='));
+var mm = dec.match(/https?:\/\/[^\s"']+/);
+if (mm) {
+var q = mm[0].match(/(\d{3,4})p?/);
+urls.push({ url: mm[0], quality: q ? q[1] + 'p' : '1080p' });
+}
+} catch (e) {}
+}
+parts.forEach(tryPart);
+if (!urls.length) {
+var re = /[A-Za-z0-9+/=]{20,}/g, m;
+while ((m = re.exec(encoded)) !== null) tryPart(m[0]);
+}
+return urls;
+}
+function buildQuality(url) {
+var map = {};
+if (/^https?:/.test(url)) {
+if (/\.m3u8(?=$|\?)/.test(url)) return { 'AUTO': url };
+if (/\.mp4(?=$|\?|:)/.test(url)) { map['AUTO'] = url + ':hls:manifest.m3u8'; map['MP4'] = url; return map; }
+return { '1080p': url };
+}
+var list = decodeRezkaUrl(url);
+list.forEach(function (q) { map[q.quality] = q.url; });
+return map;
+}
+function streamFromHtml(card) {
+var h = card._html || '';
+var m = h.match(/file:\s*["']([^"']{20,})["']/) ||
+h.match(/initCDN\(\s*["']([^"']{20,})["']/) ||
+h.match(/soCdnJS\s*=\s*{[\s\S]{0,400}?url:\s*["']([^"']{20,})["']/);
+if (!m) return null;
+var q = buildQuality(m[1]);
+return Object.keys(q).length ? q : null;
+}
+
+// ==================== САНТИЗАЦИЯ META (fix cloneS2 stack overflow) ====================
+function liteCard(card) {
+if (!card) return null;
+return {
+rel: card.rel, contentId: card.contentId, title: card.title, poster: card.poster,
+isSerial: card.isSerial, user_hash: card.user_hash, _mirror: card._mirror,
+translators: (card.translators || []).map(function (t) {
+return { id: t.id, title: t.title, camrip: t.camrip, ads: t.ads, director: t.director };
+})
+};
+}
+function sanitizeMeta(meta) {
+return {
+_card: liteCard(meta._card),
+url: meta.url, title: meta.title, poster: meta.poster, type: meta.type,
+voice_id: meta.voice_id, voice: meta.voice, season: meta.season, episode: meta.episode,
+hash: meta.hash, percent: meta.percent, ts: meta.ts
+};
 }
 
 // ==================== REZKA API ====================
@@ -492,88 +586,27 @@ if (sd0) { card._sd[voiceId] = sd0; cb(sd0); return; }
 fail(e);
 });
 }
-function decodeRezkaUrl(encoded) {
-var urls = [];
-if (!encoded) return urls;
-if (/^https?:/.test(encoded)) {
-var q0 = /(\d{3,4})p/.exec(encoded);
-return [{ url: encoded, quality: /\.m3u8/.test(encoded) ? 'AUTO' : (q0 ? q0[1] + 'p' : '1080p') }];
-}
-var str = encoded.replace(/\/\/_\/\//g, '|').replace(/#/g, '').replace(/[^A-Za-z0-9+/=|]/g, '');
-var parts = str.split('|').filter(function (p) { return p.length > 5; });
-function tryPart(part) {
-try {
-var dec = atob(part.padEnd(Math.ceil(part.length / 4) * 4, '='));
-var mm = dec.match(/https?:\/\/[^\s"']+/);
-if (mm) {
-var q = mm[0].match(/(\d{3,4})p?/);
-urls.push({ url: mm[0], quality: q ? q[1] + 'p' : '1080p' });
-}
-} catch (e) {}
-}
-parts.forEach(tryPart);
-if (!urls.length) {
-var re = /[A-Za-z0-9+/=]{20,}/g, m;
-while ((m = re.exec(encoded)) !== null) tryPart(m[0]);
-}
-return urls;
-}
-// [ПАТЧ 2/3] buildQuality: mp4 -> mp4:hls:manifest.m3u8 (протокол CDN 2026)
-function buildQuality(url) {
-var map = {};
-if (/^https?:/.test(url)) {
-if (/\.m3u8(?=$|\?)/.test(url)) return { 'AUTO': url };
-if (/\.mp4(?=$|\?|:)/.test(url)) {
-map['AUTO'] = url + ':hls:manifest.m3u8';
-map['MP4'] = url;
-return map;
-}
-return { '1080p': url };
-}
-var list = decodeRezkaUrl(url);
-list.forEach(function (q) { map[q.quality] = q.url; });
-return map;
-}
-function streamFromHtml(card) {
-var h = card._html || '';
-var m = h.match(/file:\s*["']([^"']{20,})["']/) ||
-h.match(/initCDN\(\s*["']([^"']{20,})["']/) ||
-h.match(/soCdnJS\s*=\s*{[\s\S]{0,400}?url:\s*["']([^"']{20,})["']/);
-if (!m) return null;
-var q = buildQuality(m[1]);
-return Object.keys(q).length ? q : null;
-}
 function apiStream(card, voiceId, season, episode, cb, fail) {
 var v = null, i;
 for (i = 0; i < (card.translators || []).length; i++) {
 if (card.translators[i].id === voiceId) v = card.translators[i];
 }
-var base = { id: card.contentId, translator_id: voiceId || '' };
 var form;
 if (card.isSerial && season && episode) {
-form = { id: base.id, translator_id: base.translator_id, season: season, episode: episode, action: 'get_stream' };
+form = { id: card.contentId, translator_id: voiceId || '', season: season, episode: episode, action: 'get_stream' };
 } else {
-form = { id: base.id, translator_id: base.translator_id, action: 'get_movie',
+form = { id: card.contentId, translator_id: voiceId || '', action: 'get_movie',
 is_camrip: v ? v.camrip : '0', is_ads: v ? v.ads : '0', is_director: v ? v.director : '0' };
 }
-function extract(raw) {
-if (!raw) return null;
-// Формат ответа 2026: "[360p]https://voidslam.org/.../xxx.mp4:hls:manifest.m3u8[ or ...]"
-var m = String(raw).match(/https:\/\/[^\s"']+/);
-return m ? m[0] : null;
-}
 getJsonAny(ajaxRel('ajax/get_cdn_series/'), form, card.rel, card._mirror, function (data) {
-var u = extract(data && (data.url || data.streams));
-if (!u) {
+var map = parseQualityList(data && (data.url || data.streams));
+if (!Object.keys(map).length) {
 var q0 = streamFromHtml(card);
 if (q0 && Object.keys(q0).length) { cb(q0); return; }
 fail(new Error((data && data.message) || 'сервер не вернул ссылку'));
 return;
 }
-// URL уже полный (манифест) — не добавляем суффикс
-if (/\.m3u8(?=$|\?|:)/.test(u)) cb({ 'AUTO': u });
-else if (/\.mp4(?=$|\?|:)/.test(u)) cb({ 'AUTO': u + ':hls:manifest.m3u8', 'MP4': u });
-else cb({ 'AUTO': u });
+cb(map);
 }, function (e) {
 var q0 = streamFromHtml(card);
 if (q0 && Object.keys(q0).length) { cb(q0); return; }
@@ -638,19 +671,7 @@ function hashFor(meta) { return Lampa.Utils.hash(['rezka', meta.url, meta.season
 function histGet() { var h = stGet('history', []); return Array.isArray(h) ? h : []; }
 function histSave(l) { stSet('history', l.slice(0, 100)); }
 function histPush(meta) {
-// Убираем большие/необходимые поля перед записью в storage
-var safe = {};
-for (var k in meta) {
-if (k === '_card') {
-safe._card = {
-rel: meta._card.rel,
-title: meta._card.title,
-poster: meta._card.poster,
-isSerial: meta._card.isSerial,
-contentId: meta._card.contentId
-};
-} else safe[k] = meta[k];
-}
+var safe = sanitizeMeta(meta);
 var list = histGet().filter(function (x) {
 return !(x.url === safe.url && String(x.season || 0) === String(safe.season || 0) && String(x.episode || 0) === String(safe.episode || 0));
 });
@@ -672,13 +693,13 @@ if (!keys.length) { Lampa.Noty.show('Rezka: не удалось получить
 meta.hash = hashFor(meta);
 var file = {
 title: meta.title + (meta.season ? ' (S' + meta.season + ' E' + meta.episode + ')' : ''),
-url: quality[keys[0]],
+url: pickInitial(quality),
 quality: quality,
 subtitles: [],
 isonline: true,
 hash: meta.hash,
 timeline: Lampa.Timeline.view(meta.hash),
-rezka: meta
+rezka: sanitizeMeta(meta)
 };
 Lampa.Player.play(file);
 if (playlist && playlist.length > 1) Lampa.Player.playlist(playlist);
@@ -699,12 +720,12 @@ apiStream(card, baseMeta.voice_id, baseMeta.season, ep.id, function (q) {
 var keys = Object.keys(q);
 res[i] = {
 title: card.title + ' — ' + (ep.title || ('Серия ' + ep.id)),
-url: keys.length ? q[keys[0]] : '',
+url: keys.length ? pickInitial(q) : '',
 quality: q,
 isonline: true,
 hash: meta.hash,
 timeline: Lampa.Timeline.view(meta.hash),
-rezka: meta
+rezka: sanitizeMeta(meta)
 };
 if (++done === episodes.length) fin();
 }, function () { if (++done === episodes.length) fin(); });
@@ -1071,7 +1092,7 @@ var m = rel.match(/\/(\d+)-/);
 return {
 rel: rel, contentId: m ? m[1] : null,
 title: meta.title || 'Загрузка…', poster: meta.poster || '',
-descr: meta.info || '', translators: [], seasons: [],
+descr: meta.info || '', translators: [], seasons: [], info: {},
 isSerial: meta.type === 'serial' || rel.indexOf('/series/') >= 0,
 _html: '', _mirror: '', user_hash: ''
 };
@@ -1096,31 +1117,11 @@ if (cb) cb();
 }
 function baseMeta() {
 var v = curVoice();
-// ВАЖНО: meta для плеера/истории не должен содержать большие/циклические объекты
-// (card._html = 140KB, card._sd = замыкание). Это было причиной "Maximum call stack size exceeded"
-// при клонировании state ядром Lampa (cloneS2).
-var safeCard = {
-rel: card.rel,
-contentId: card.contentId,
-title: card.title,
-poster: card.poster,
-isSerial: card.isSerial,
-user_hash: card.user_hash,
-translators: (card.translators || []).map(function (t) {
-return { id: t.id, title: t.title, camrip: t.camrip, ads: t.ads, director: t.director };
-}),
-_mirror: card._mirror
-};
 return {
-_card: safeCard,
-url: card.rel,
-title: card.title,
-poster: card.poster,
+_card: card, url: card.rel, title: card.title, poster: card.poster,
 type: card.isSerial ? 'serial' : 'movie',
-voice_id: v.id,
-voice: v.title,
-season: card.isSerial ? seasonId : '',
-episode: ''
+voice_id: v.id, voice: v.title,
+season: card.isSerial ? seasonId : '', episode: ''
 };
 }
 function playEpisode(ep) {
@@ -1142,6 +1143,7 @@ if (!card.poster) for (i = 0; i < items.length; i++) if (norm(items[i].title) ==
 render();
 }, function () {});
 }
+var INFO_KEYS = ['Рейтинги', 'Дата выхода', 'Страна', 'Режиссер', 'Жанр', 'В качестве', 'В переводе', 'Возраст', 'Время', 'В ролях актеры'];
 function render() {
 scroll.clear();
 if (!card) { scroll.append(sectionTitle('Загрузка…')); nav(); return; }
@@ -1150,6 +1152,11 @@ scroll.append($('<div class="rezka-head">' +
 '<div class="rezka-head__poster">' + (card.poster ? '<img src="' + esc(card.poster) + '">' : '') + '</div>' +
 '<div class="rezka-head__info"><div class="rezka-head__title">' + esc(card.title) + '</div>' +
 '<div class="rezka-head__descr">' + esc(card.descr) + '</div></div></div>'));
+var infoHtml = '';
+INFO_KEYS.forEach(function (k) {
+if (card.info && card.info[k]) infoHtml += '<div class="rezka-info__row"><span class="rezka-info__k">' + esc(k) + ':</span> ' + esc(card.info[k]) + '</div>';
+});
+if (infoHtml) scroll.append($('<div class="rezka-info">' + infoHtml + '</div>'));
 if (card._htmlFail) scroll.append($('<div class="rezka-note">HTML карточки не получен: ' + esc(snippet(card._htmlFail, 120)) + '</div>'));
 var btns = $('<div class="rezka-btns"></div>');
 var hist = histGet().filter(function (h) { return h.url === card.rel; })[0];
@@ -1252,7 +1259,7 @@ card.poster = parsed.poster || card.poster;
 card.descr = parsed.descr || card.descr;
 card.translators = parsed.translators;
 card.seasons = parsed.seasons;
-card.user_hash = parsed.user_hash || '';
+card.info = parsed.info || {};
 card._html = html;
 card._mirror = mHost;
 afterCard();
@@ -1411,6 +1418,12 @@ onChange: function (v) { stSet('transport', v); }
 });
 Lampa.SettingsApi.addParam({
 component: 'rezka',
+param: { name: 'rezka_quality_sel', type: 'select', values: { auto: 'Авто (максимальное)', '1080p': '1080p', '720p': '720p', '480p': '480p', '360p': '360p' }, default: 'auto' },
+field: { name: 'Стартовое качество', description: 'С какого качества начинать; в плеере переключается на лету' },
+onChange: function (v) { stSet('quality', v); }
+});
+Lampa.SettingsApi.addParam({
+component: 'rezka',
 param: { name: 'rezka_login_btn', type: 'button', default: '' },
 field: { name: 'Войти на rezka', description: 'Пробует вход по каскаду зеркал' },
 onChange: function () {
@@ -1482,6 +1495,9 @@ Lampa.Template.add('rezka_css', '<style>' +
 '.rezka-head__poster img{width:100%;height:100%;object-fit:cover}' +
 '.rezka-head__title{font-size:1.8em;margin-bottom:.6em}' +
 '.rezka-head__descr{color:#a5a5a5;line-height:1.45;max-height:14em;overflow:hidden}' +
+'.rezka-info{margin:0 0 1.2em;color:#a5a5a5;line-height:1.55;font-size:.95em}' +
+'.rezka-info__row{margin-bottom:.25em}' +
+'.rezka-info__k{color:#8a8a8a}' +
 '.rezka-cont{display:flex;align-items:center;width:100%;padding:.8em 1.2em;background:#232323;border-radius:.6em;margin-bottom:.5em;box-sizing:border-box}' +
 '.rezka-cont.focus{box-shadow:0 0 0 .2em #fff}' +
 '.rezka-cont--head{background:transparent;color:#9a9a9a;padding:.4em 1.2em;margin-bottom:.2em}' +
@@ -1512,7 +1528,7 @@ if (tries > 20) clearInterval(iv);
 }, 1000);
 }
 function init() {
-// === МИКРО-ПАТЧ v4.8.1: предохранитель history (fix SecurityError: replaceState >100/10s) ===
+// предохранитель history: rate-limit + глотание исключений (SecurityError/RangeError)
 (function () {
 try {
 var LIMIT = 60, WINDOW = 10000, t0 = Date.now(), cnt = 0;
@@ -1522,7 +1538,7 @@ var n = Date.now();
 if (n - t0 > WINDOW) { t0 = n; cnt = 0; }
 cnt++;
 if (cnt > LIMIT) return undefined;
-return fn.apply(this, arguments);
+try { return fn.apply(this, arguments); } catch (e) { return undefined; }
 };
 }
 if (window.history && typeof history.replaceState === 'function') {
@@ -1533,16 +1549,15 @@ history.pushState = guard(history.pushState.bind(history));
 }
 } catch (e) {}
 })();
-// === конец микро-патча ===
 addCss();
 Lampa.Component.add(COMP_MAIN, RezkaMain);
 Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.8.2',
+version: '4.9.0',
 name: 'HDREZKA Lab',
-description: 'Фильмы и сериалы с rezka: карусели, каскад зеркал, озвучки, серии, история',
+description: 'Фильмы и сериалы с rezka: карусели, качества, мета, озвучки, серии, история',
 component: COMP_MAIN,
 onContextMenu: function () { return { title: 'Смотреть на HDREZKA' }; },
 onContextLauch: function (card) {
