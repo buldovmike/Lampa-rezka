@@ -1,10 +1,10 @@
 /**
-HDREZKA for Lampa/Luxo — v4.11.0
-FIX КОРНЕВОЙ: глобальная обёртка Lampa.Select.show — onSelect/onBack защищены от реентера
-(рекурсия close->onBack->close, дававшая RangeError в jquery removeClass / clone$2 / pushState).
-UI карточки в стиле Lampa: чипы фактов (год/страна/качество/возраст/время/IMDb/KP/жанры),
-оригинальное название, описание; карусели: Франшиза (если есть на rezka), Актёры (фото,
-клик = список работ), Похожее. Всё остальное = v4.10 (guards, качества, jars, транспорт).
+HDREZKA for Lampa/Luxo — v4.12.0
+= v4.11 + финальный UI-полиш:
+ (1) аватары актёров из /person/… (фоновая загрузка + кэш person_imgs),
+ (2) детерминированный возврат фокуса после Select (data-fk метки кнопок),
+ (3) выбор серии НЕ запускает плеер — только выбор; старт кнопкой «Смотреть»,
+ (4) франшиза/сага парсится по якорю a[href*="/franchises/"] (блок-ссылка на карточке).
 Worker v10 / локальный прокси v2 — без изменений.
 */
 (function () {
@@ -142,6 +142,12 @@ function acceptCard(html) {
 if (isBadHtml(html)) return false;
 return /id=["']?post_id|translator|data-translator_id|b-post|simple-seasons|simple_episodes|playerjs|initCDN|soCdnJS|file_list|data-episode_id|<h1/i.test(html);
 }
+function personImgCache() {
+var o = null;
+try { o = JSON.parse(stGet('person_imgs', '')); } catch (e) {}
+return o && typeof o === 'object' ? o : {};
+}
+function personImgSave(o) { stSet('person_imgs', JSON.stringify(o)); }
 
 // ==================== COOKIE-JAR ПО ХОСТАМ ====================
 function jarStore() {
@@ -397,40 +403,58 @@ if (k && v && !info[k]) info[k] = v;
 } catch (e) {}
 return info;
 }
+// Франшиза/сага: блок-ссылка на карточке ведёт на /franchises/… (или /collections/…)
 function parseFranchise(html) {
 var res = { title: '', items: [] };
 try {
 var doc = new DOMParser().parseFromString(html, 'text/html');
+function collectFrom(cont, title) {
+var seen = {};
+var links = nodeList('a[href*=".html"]', cont);
+if (links.length < 2) return false;
+links.forEach(function (l) {
+var href = (l.getAttribute('href') || '').split('#')[0];
+var lt = cleanTitle(textOf(l));
+if (!lt || seen[href]) return;
+seen[href] = 1;
+var rowScope = l.closest ? (l.closest('tr') || l.closest('li') || l.parentNode) : l.parentNode;
+var rowText = cleanTitle(textOf(rowScope || l));
+var ym = rowText.match(/(19|20)\d{2}/);
+var rt = rowText.match(/\b\d[.,]\d{1,2}\b/);
+res.items.push({
+url: relOf(href), title: lt,
+year: ym ? ym[0] : '',
+rating: rt ? rt[0].replace(',', '.') : ''
+});
+});
+res.items = res.items.slice(0, 40);
+res.title = title;
+return res.items.length > 0;
+}
+var anchors = nodeList('a[href*="/franchises/"], a[href*="/collections/"]', doc);
+for (var i = 0; i < anchors.length; i++) {
+var t = cleanTitle(textOf(anchors[i]));
+if (!t || t.length > 90) continue;
+var cont = anchors[i].parentNode;
+for (var up = 0; up < 4 && cont; up++) {
+if (nodeList('a[href*=".html"]', cont).length >= 2) break;
+cont = cont.parentNode;
+}
+if (cont && collectFrom(cont, t)) return res;
+}
+// fallback: заголовки-секции
 var KW = /все\s+(фильмы|проекты|сезоны)|сага|вселенн|франшиз|спин-?офф|цикл\s+фильмов/i;
 var heads = nodeList('h2, h3, h4, [class*="section__title"], [class*="post__section"]', doc);
 for (var hI = 0; hI < heads.length; hI++) {
 var ht = cleanTitle(textOf(heads[hI]));
 if (!ht || !KW.test(ht)) continue;
-var container = heads[hI].parentNode;
-for (var up = 0; up < 2 && container; up++) {
-if (nodeList('a[href*=".html"]', container).length >= 2) break;
-container = container.parentNode;
+var c2 = heads[hI].parentNode;
+for (var up2 = 0; up2 < 3 && c2; up2++) {
+if (nodeList('a[href*=".html"]', c2).length >= 2) break;
+c2 = c2.parentNode;
 }
-if (!container) continue;
-var seen = {};
-nodeList('a[href*=".html"]', container).forEach(function (a) {
-var href = (a.getAttribute('href') || '').split('#')[0];
-var t = cleanTitle(textOf(a));
-if (!t || href.indexOf('.html') < 0 || seen[href]) return;
-seen[href] = 1;
-var rowScope = a.closest ? (a.closest('tr') || a.closest('li') || a.parentNode) : a.parentNode;
-var rowText = cleanTitle(textOf(rowScope || a));
-var ym = rowText.match(/(19|20)\d{2}/);
-var rt = rowText.match(/\b\d[.,]\d{1,2}\b/);
-res.items.push({
-url: relOf(href), title: t,
-year: ym ? ym[0] : '',
-rating: rt ? rt[0].replace(',', '.') : ''
-});
-});
-if (res.items.length) { res.title = ht; break; }
+if (c2 && collectFrom(c2, ht)) return res;
 }
-res.items = res.items.slice(0, 40);
 } catch (e) {}
 return res;
 }
@@ -464,9 +488,16 @@ if (cont.querySelector && cont.querySelector('img')) break;
 cont = cont.parentNode;
 }
 var img = cont && cont.querySelector ? cont.querySelector('img') : null;
+var a = el.closest ? el.closest('a[href*="/person/"]') : null;
+if (!a && cont && cont.querySelector) a = cont.querySelector('a[href*="/person/"]');
+if (!a) {
+var pa = el.querySelector ? el.querySelector('a[href*="/person/"]') : null;
+if (pa) a = pa;
+}
 actors.push({
 name: name,
-img: img ? absUrl(img.getAttribute('src') || img.getAttribute('data-src') || '', base) : ''
+img: img ? absUrl(img.getAttribute('src') || img.getAttribute('data-src') || '', base) : '',
+purl: a ? relOf(a.getAttribute('href')) : ''
 });
 });
 } catch (e) {}
@@ -996,7 +1027,7 @@ card_url: it.url, card_meta: it, resume: resume ? it : undefined, page: 1
 }
 function btnEl(label) { return $('<div class="rezka-btn selector">' + esc(label) + '</div>'); }
 function actorEl(a) {
-return $('<div class="rezka-actor selector">' +
+return $('<div class="rezka-actor selector" data-purl="' + esc(a.purl || '') + '">' +
 '<div class="rezka-actor__ph">' + (a.img ? '<img src="' + esc(a.img) + '" loading="lazy">' : '') + '</div>' +
 '<div class="rezka-actor__n">' + esc(a.name) + '</div></div>');
 }
@@ -1226,9 +1257,30 @@ var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
 var wrap = pageWrap(scroll);
 var last = false, inited = false;
 var card = null, voiceIdx = 0, seasonId = '', episodes = [], lastEpId = '';
+var focusKey = 'play', needFocusRestore = false;
 var meta = object.card_meta || {};
-function setLast(el) { last = el; }
+function setLast(el) {
+last = el;
+try { var fk = el.attr ? el.attr('data-fk') : ''; if (fk) focusKey = fk; } catch (e) {}
+}
 function nav() { refreshNav(scroll, COMP_CARD, function () { return last; }); }
+// детерминированный возврат фокуса после перерисовки (после Select и т.п.)
+function focusRestore() {
+setTimeout(function () {
+try {
+var r = scroll.render();
+Lampa.Controller.collectionSet(r);
+var cur = r.find('.focus').first();
+var detached = !cur.length || !document.contains(cur[0]);
+if (needFocusRestore || detached) {
+var t = r.find('[data-fk="' + focusKey + '"]').first();
+if (!t.length) t = r.find('.selector').first();
+if (t.length) Lampa.Controller.collectionFocus(t, r);
+needFocusRestore = false;
+}
+} catch (e) {}
+}, 40);
+}
 function initialCard() {
 var rel = object.card_url || meta.url || '';
 var m = rel.match(/\/(\d+)-/);
@@ -1289,7 +1341,47 @@ if (!card.poster) for (i = 0; i < items.length; i++) if (norm(items[i].title) ==
 render();
 }, function () {});
 }
-// горизонтальная секция-карусель (как «Коллекция»/«Актёры» в Lampa)
+// аватары актёров: кэш + фоновая догрузка со страниц /person/…
+function applyActorImg(a) {
+try {
+if (!a.purl || !a.img) return;
+var ph = scroll.render().find('.rezka-actor[data-purl="' + a.purl + '"] .rezka-actor__ph');
+if (ph.length && !ph.find('img').length) ph.html('<img src="' + esc(a.img) + '" loading="lazy">');
+} catch (e) {}
+}
+function loadActorImgs() {
+var cache = personImgCache();
+var queue = [];
+(card.actors || []).forEach(function (a) {
+if (a.img || !a.purl) return;
+if (cache[a.purl]) { a.img = cache[a.purl]; applyActorImg(a); return; }
+queue.push(a);
+});
+queue = queue.slice(0, 10);
+(function step() {
+if (!queue.length || !inited) return;
+var a = queue.shift();
+getText(a.purl, { method: 'GET' }, function (html) {
+var url = '';
+try {
+var d2 = new DOMParser().parseFromString(html, 'text/html');
+var im = d2.querySelector('.b-person__cover img, .b-person__avatar img, .b-post__poster img, img[itemprop="image"]');
+if (im) url = absUrl(im.getAttribute('src') || im.getAttribute('data-src') || '');
+if (!url) {
+var mo = html.match(/og:image["']\s+content=["']([^"']+)["']/i);
+if (mo) url = absUrl(mo[1]);
+}
+} catch (e) {}
+if (url) {
+cache[a.purl] = url;
+personImgSave(cache);
+a.img = url;
+applyActorImg(a);
+}
+step();
+}, function () { step(); });
+})();
+}
 function hRow(title, items, builder, onEnter) {
 if (!items || !items.length) return;
 var box = $('<div class="rezka-rowbox"></div>');
@@ -1325,7 +1417,7 @@ return c.join('');
 }
 function render() {
 scroll.clear();
-if (!card) { scroll.append(sectionTitle('Загрузка…')); nav(); return; }
+if (!card) { scroll.append(sectionTitle('Загрузка…')); nav(); focusRestore(); return; }
 try { if (Lampa.Background && Lampa.Background.change) Lampa.Background.change(card.poster); } catch (e) {}
 scroll.append($('<div class="rezka-head">' +
 '<div class="rezka-head__poster">' + (card.poster ? '<img src="' + esc(card.poster) + '">' : '') + '</div>' +
@@ -1338,16 +1430,17 @@ scroll.append($('<div class="rezka-head">' +
 if (card._htmlFail) scroll.append($('<div class="rezka-note">HTML карточки не получен: ' + esc(snippet(card._htmlFail, 120)) + '</div>'));
 var btns = $('<div class="rezka-btns"></div>');
 var hist = histGet().filter(function (h) { return h.url === card.rel; })[0];
-var bPlay = btnEl(card.isSerial ? (hist ? ('Продолжить S' + hist.season + ' E' + hist.episode) : 'Смотреть') : 'Смотреть');
+var bPlay = btnEl(card.isSerial ? (lastEpId ? ('Смотреть S' + seasonId + ' E' + lastEpId) : (hist ? ('Продолжить S' + hist.season + ' E' + hist.episode) : 'Смотреть')) : 'Смотреть');
+bPlay.attr('data-fk', 'play');
 bPlay.on('hover:focus', function () { setLast(bPlay); scroll.update(bPlay, true); });
 bPlay.on('hover:enter', function () {
 ensureAuth(function () {
 if (!card.isSerial) { playMovie(); return; }
-var target = object.resume || hist;
-if (target && target.season && String(target.season) !== String(seasonId || '')) seasonId = String(target.season);
 loadEpisodes(function () {
-var ep = null;
-if (target) for (var i = 0; i < episodes.length; i++) if (String(episodes[i].id) === String(target.episode)) ep = episodes[i];
+var ep = null, i;
+if (lastEpId) for (i = 0; i < episodes.length; i++) if (String(episodes[i].id) === String(lastEpId)) ep = episodes[i];
+var target = object.resume || hist;
+if (!ep && target) for (i = 0; i < episodes.length; i++) if (String(episodes[i].id) === String(target.episode)) ep = episodes[i];
 if (!ep) ep = episodes[0];
 if (ep) { lastEpId = String(ep.id); playEpisode(ep); } else Lampa.Noty.show('Rezka: нет серий');
 });
@@ -1356,6 +1449,7 @@ if (ep) { lastEpId = String(ep.id); playEpisode(ep); } else Lampa.Noty.show('Rez
 btns.append(bPlay);
 if (card.translators.length) {
 var bV = btnEl('Озвучка: ' + curVoice().title);
+bV.attr('data-fk', 'voice');
 bV.on('hover:focus', function () { setLast(bV); scroll.update(bV, true); });
 bV.on('hover:enter', function () {
 Lampa.Select.show({
@@ -1365,7 +1459,9 @@ onSelect: function (s) {
 Lampa.Select.close();
 for (var i = 0; i < card.translators.length; i++) if (card.translators[i].title === s.title) voiceIdx = i;
 stSet('last_voice', s.title);
-setTimeout(function () { loadEpisodes(function () { render(); nav(); }); }, 0);
+focusKey = 'voice';
+needFocusRestore = true;
+setTimeout(function () { loadEpisodes(function () { render(); }); }, 0);
 },
 onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); }
 });
@@ -1374,6 +1470,7 @@ btns.append(bV);
 }
 if (card.seasons.length > 1) {
 var bS = btnEl('Сезон: ' + (seasonId || card.seasons[0].id));
+bS.attr('data-fk', 'season');
 bS.on('hover:focus', function () { setLast(bS); scroll.update(bS, true); });
 bS.on('hover:enter', function () {
 Lampa.Select.show({
@@ -1382,7 +1479,10 @@ items: card.seasons.map(function (s) { return { title: s.title, id: s.id }; }),
 onSelect: function (s) {
 Lampa.Select.close();
 seasonId = s.id;
-setTimeout(function () { loadEpisodes(function () { render(); nav(); }); }, 0);
+lastEpId = '';
+focusKey = 'season';
+needFocusRestore = true;
+setTimeout(function () { loadEpisodes(function () { render(); }); }, 0);
 },
 onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); }
 });
@@ -1393,6 +1493,7 @@ if (card.isSerial) {
 var curEp = null;
 for (var ei = 0; ei < episodes.length; ei++) if (String(episodes[ei].id) === String(lastEpId)) curEp = episodes[ei];
 var bE = btnEl('Серия: ' + (curEp ? (curEp.title || ('№' + curEp.id)) : (episodes.length ? 'выбрать' : '—')));
+bE.attr('data-fk', 'episode');
 bE.on('hover:focus', function () { setLast(bE); scroll.update(bE, true); });
 bE.on('hover:enter', function () {
 if (!episodes.length) { Lampa.Noty.show('Rezka: серии не загрузились'); return; }
@@ -1404,11 +1505,12 @@ var p = percentOf(m2);
 return { title: (e.title || ('Серия ' + e.id)) + (p ? ' — ' + Math.round(p) + '%' : ''), id: e.id };
 }),
 onSelect: function (s) {
+// ТОЛЬКО выбор: плеер стартует кнопкой «Смотреть»
 Lampa.Select.close();
 lastEpId = String(s.id);
-var ep = null;
-for (var i = 0; i < episodes.length; i++) if (String(episodes[i].id) === lastEpId) ep = episodes[i];
-if (ep) setTimeout(function () { ensureAuth(function () { playEpisode(ep); }); }, 0);
+focusKey = 'episode';
+needFocusRestore = true;
+setTimeout(function () { render(); }, 0);
 },
 onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); }
 });
@@ -1432,6 +1534,8 @@ card_url: it.url, card_meta: it, page: 1
 });
 });
 nav();
+focusRestore();
+loadActorImgs();
 }
 function afterCard() {
 pickVoice();
@@ -1749,8 +1853,6 @@ if (tries > 20) clearInterval(iv);
 }, 1000);
 }
 function init() {
-// ГЛАВНЫЙ FIX v4.11: onSelect/onBack Select становятся нереентерабельными.
-// Рекурсия close->onBack->close (RangeError в jquery removeClass / clone$2) физически невозможна.
 try {
 if (Lampa.Select && typeof Lampa.Select.show === 'function' && !Lampa.Select.__rezkaWrapped) {
 var origShow = Lampa.Select.show.bind(Lampa.Select);
@@ -1779,9 +1881,9 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.11.0',
+version: '4.12.0',
 name: 'HDREZKA Lab',
-description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, качества, франшизы, актёры, похожее',
+description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры с аватарами, качества',
 component: COMP_MAIN,
 onContextMenu: function () { return { title: 'Смотреть на HDREZKA' }; },
 onContextLauch: function (card) {
