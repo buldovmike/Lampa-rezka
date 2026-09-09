@@ -1471,13 +1471,35 @@ if (tries > 20) clearInterval(iv);
 }, 1000);
 }
 function init() {
+// === МИКРО-ПАТЧ v4.8.1: предохранитель history (fix SecurityError: replaceState >100/10s) ===
+(function () {
+try {
+var LIMIT = 60, WINDOW = 10000, t0 = Date.now(), cnt = 0;
+function guard(fn) {
+return function () {
+var n = Date.now();
+if (n - t0 > WINDOW) { t0 = n; cnt = 0; }
+cnt++;
+if (cnt > LIMIT) return undefined;
+return fn.apply(this, arguments);
+};
+}
+if (window.history && typeof history.replaceState === 'function') {
+history.replaceState = guard(history.replaceState.bind(history));
+}
+if (window.history && typeof history.pushState === 'function') {
+history.pushState = guard(history.pushState.bind(history));
+}
+} catch (e) {}
+})();
+// === конец микро-патча ===
 addCss();
 Lampa.Component.add(COMP_MAIN, RezkaMain);
 Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.8.0',
+version: '4.8.1',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карусели, каскад зеркал, озвучки, серии, история',
 component: COMP_MAIN,
