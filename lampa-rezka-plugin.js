@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v4.3.0
+HDREZKA for Lampa/Luxo — v4.4.0
 FIX: navigation regression of v4.1 (horizontal scrolls removed; proven vertical grid back),
 bigger cards (Lampa main-UI size), feed pagination: "Ещё…" button + vertical scroll.onEnd auto-load,
 description always shown. Mirror cascade + instant meta + poster enrichment kept. Worker: v10.
@@ -367,8 +367,13 @@ seasons.sort(function (a, b) { return a.id - b.id; });
 var contentId = pid ? pid.getAttribute('value') : (m ? m[1] : null);
 if (!card_descr) card_descr = (doc.querySelector('meta[property="og:description"]') ? doc.querySelector('meta[property="og:description"]').getAttribute('content') : '') || textOf(doc.querySelector('[class*="descr"]'));
 if (!contentId) { var mn = html.match(/news_id=["']?(\d{3,7})["']?/); if (mn) contentId = mn[1]; }
+var user_hash = '';
+var muh = html.match(/name=["']user_hash["']\s+value=["']([^"']+)["']/i) ||
+html.match(/user_hash\s*=\s*["']([a-zA-Z0-9_\-]{6,64})["']/) ||
+html.match(/["']user_hash["']\s*:\s*["']([^"']+)["']/i);
+if (muh) user_hash = muh[1];
 return {
-rel: rel, contentId: contentId, title: title, poster: poster,
+rel: rel, contentId: contentId, title: title, poster: poster, user_hash: user_hash,
 descr: textOf(doc.querySelector('.b-post__description')) || card_descr || '',
 translators: translators, seasons: seasons,
 isSerial: rel.indexOf('/series/') >= 0
@@ -420,7 +425,9 @@ var keys = Object.keys(eps).sort(function (a, b) { return a - b; });
 if (!keys.length) return null;
 return { seasons: keys.map(function (k) { return { id: k, title: k + ' сезон' }; }), episodes: eps };
 }
-getJsonAny(ajaxRel('ajax/get_cdn_series/'), { id: card.contentId, translator_id: voiceId || '', action: 'get_episodes' }, card.rel, card._mirror, function (d) {
+var formE = { id: card.contentId, translator_id: voiceId || '', action: 'get_episodes' };
+if (card.user_hash) formE.user_hash = card.user_hash;
+getJsonAny(ajaxRel('ajax/get_cdn_series/'), formE, card.rel, card._mirror, function (d) {
 var sdoc = new DOMParser().parseFromString(d.seasons || '<i></i>', 'text/html');
 var edoc = new DOMParser().parseFromString(d.episodes || '<i></i>', 'text/html');
 var seasons = nodeList('li[data-tab_id], li[data-season]', sdoc).map(function (li) {
@@ -495,6 +502,7 @@ return Object.keys(q).length ? q : null;
 }
 function apiStream(card, voiceId, season, episode, cb, fail) {
 var form = { id: card.contentId, translator_id: voiceId || '', action: 'get_stream', favs: '0' };
+if (card.user_hash) form.user_hash = card.user_hash;
 if (card.isSerial && season && episode) { form.season = season; form.episode = episode; }
 getJsonAny(ajaxRel('ajax/get_cdn_series/'), form, card.rel, card._mirror, function (data) {
 if (!data || !data.success || !data.url) {
@@ -957,6 +965,7 @@ var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
 var wrap = pageWrap(scroll);
 var last = false, inited = false, interacted = false;
 var card = null, voiceIdx = 0, seasonId = '', episodes = [];
+var lastEpId = '';
 var meta = object.card_meta || {};
 function setLast(el) { last = el; interacted = true; }
 function nav() { refreshNav(scroll, COMP_CARD, function () { return last; }, interacted); }
@@ -1039,6 +1048,7 @@ loadEpisodes(function () {
 var ep = null;
 if (target) for (var i = 0; i < episodes.length; i++) if (String(episodes[i].id) === String(target.episode)) ep = episodes[i];
 if (!ep) ep = episodes[0];
+lastEpId = ep ? String(ep.id) : lastEpId;
 if (ep) playEpisode(ep); else Lampa.Noty.show('Rezka: нет серий');
 });
 });
@@ -1081,38 +1091,38 @@ btns.append(bS);
 }
 scroll.append(btns);
 if (card.isSerial) {
-scroll.append(sectionTitle('Серии'));
-if (!episodes.length) { scroll.append($('<div class="rezka-note">Серии не загрузились</div>')); nav(); return; }
-episodes.forEach(function (ep) {
-var meta2 = baseMeta(); meta2.episode = ep.id;
-var p = percentOf(meta2);
-var row = $('<div class="rezka-ep selector">' +
-'<div class="rezka-ep__num">' + esc(ep.title || ('Серия ' + ep.id)) + '</div>' +
-'<div class="rezka-ep__bar"><div style="width:' + p + '%"></div></div>' +
-'<div class="rezka-ep__pct">' + (p ? Math.round(p) + '%' : '') + '</div></div>');
-row.on('hover:focus', function () { setLast(row); scroll.update(row, true); });
-row.on('hover:enter', function () { ensureAuth(function () { playEpisode(ep); }); });
-row.on('hover:long', function () {
+var curEp = null;
+for (var ei = 0; ei < episodes.length; ei++) if (String(episodes[ei].id) === String(lastEpId)) curEp = episodes[ei];
+var bE = btnEl('Серия: ' + (curEp ? (curEp.title || ('№' + curEp.id)) : (episodes.length ? 'выбрать' : '—')));
+bE.on('hover:focus', function () { setLast(bE); scroll.update(bE, true); });
+bE.on('hover:enter', function () {
+if (!episodes.length) { Lampa.Noty.show('Rezka: серии не загрузились'); return; }
 Lampa.Select.show({
-title: ep.title,
-items: [{ title: p >= 90 ? 'Отметить как непросмотренную' : 'Отметить как просмотренную' }],
-onSelect: function () {
+title: 'Серии' + (seasonId ? ' (' + seasonId + ' сезон)' : ''),
+items: episodes.map(function (e) {
+var m2 = baseMeta(); m2.episode = e.id;
+var p = percentOf(m2);
+return { title: (e.title || ('Серия ' + e.id)) + (p ? ' — ' + Math.round(p) + '%' : ''), id: e.id };
+}),
+onSelect: function (s) {
 Lampa.Select.close();
-try { Lampa.Timeline.update({ hash: hashFor(meta2), percent: p >= 90 ? 0 : 100, time: 0, duration: 0 }); } catch (e) {}
-render();
-Lampa.Controller.toggle('content');
+lastEpId = String(s.id);
+var ep = null;
+for (var i = 0; i < episodes.length; i++) if (String(episodes[i].id) === lastEpId) ep = episodes[i];
+if (ep) ensureAuth(function () { playEpisode(ep); });
 },
-onBack: function () { Lampa.Controller.toggle('content'); }
+onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); }
 });
 });
-scroll.append(row);
-});
+btns.append(bE);
 }
 nav();
 }
 function afterCard() {
 pickVoice();
 seasonId = (object.resume && object.resume.season) ? String(object.resume.season) : '';
+var tgt = object.resume || histGet().filter(function (h) { return h.url === card.rel; })[0];
+lastEpId = tgt && tgt.episode ? String(tgt.episode) : '';
 if (!card.poster) enrichPoster();
 if (card.isSerial) loadEpisodes(function () { if (inited) render(); });
 else if (inited) render();
@@ -1127,6 +1137,7 @@ card.poster = parsed.poster || card.poster;
 card.descr = parsed.descr || card.descr;
 card.translators = parsed.translators;
 card.seasons = parsed.seasons;
+card.user_hash = parsed.user_hash || '';
 card._html = html;
 card._mirror = mHost;
 afterCard();
@@ -1407,7 +1418,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.3.0',
+version: '4.4.0',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: каскад зеркал, ленты с догрузкой, озвучки, серии, история',
 component: COMP_MAIN,
