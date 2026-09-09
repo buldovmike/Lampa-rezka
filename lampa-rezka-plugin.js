@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v4.2.0
+HDREZKA for Lampa/Luxo — v4.3.0
 FIX: navigation regression of v4.1 (horizontal scrolls removed; proven vertical grid back),
 bigger cards (Lampa main-UI size), feed pagination: "Ещё…" button + vertical scroll.onEnd auto-load,
 description always shown. Mirror cascade + instant meta + poster enrichment kept. Worker: v10.
@@ -106,7 +106,8 @@ if (/<title[^>]*>\s*(ВХОД|Вход|Login)/i.test(t) && t.indexOf('post_id') 
 return false;
 }
 function acceptCard(html) {
-return !isBadHtml(html) && /id="post_id"|translators-list|data-translator_id|b-post__|simple-seasons/i.test(html);
+if (isBadHtml(html)) return false;
+return /id=["']?post_id|translator|data-translator_id|b-post|simple-seasons|simple_episodes|playerjs|initCDN|soCdnJS|file_list|data-episode_id|<h1/i.test(html);
 }
 
 // ==================== COOKIE-JAR ====================
@@ -342,6 +343,7 @@ if (mh) title = cleanTitle(stripTags(mh[1]));
 var posterEl = doc.querySelector('.b-post__poster img') || doc.querySelector('img.b-post__image') ||
 doc.querySelector('meta[property="og:image"]') || doc.querySelector('link[rel="image_src"]');
 var poster = posterEl ? absUrl(posterEl.getAttribute('src') || posterEl.getAttribute('content') || posterEl.getAttribute('href') || '', base) : '';
+var card_descr = '';
 var translators = [], seen = {};
 nodeList('ul#translators-list li[data-translator_id], ul#translator-list li[data-translator_id], li[data-translator_id]', doc)
 .forEach(function (li) {
@@ -363,9 +365,11 @@ while ((ms = rs.exec(html)) !== null) if (!uniq[ms[1]]) { uniq[ms[1]] = 1; seaso
 seasons.sort(function (a, b) { return a.id - b.id; });
 }
 var contentId = pid ? pid.getAttribute('value') : (m ? m[1] : null);
+if (!card_descr) card_descr = (doc.querySelector('meta[property="og:description"]') ? doc.querySelector('meta[property="og:description"]').getAttribute('content') : '') || textOf(doc.querySelector('[class*="descr"]'));
+if (!contentId) { var mn = html.match(/news_id=["']?(\d{3,7})["']?/); if (mn) contentId = mn[1]; }
 return {
 rel: rel, contentId: contentId, title: title, poster: poster,
-descr: textOf(doc.querySelector('.b-post__description')),
+descr: textOf(doc.querySelector('.b-post__description')) || card_descr || '',
 translators: translators, seasons: seasons,
 isSerial: rel.indexOf('/series/') >= 0
 };
@@ -1303,6 +1307,23 @@ Lampa.Noty.show('Rezka: HTTP ' + (res ? res.status : '?') +
 });
 Lampa.SettingsApi.addParam({
 component: 'rezka',
+param: { name: 'rezka_probe_btn', type: 'button', default: '' },
+field: { name: 'Probe-диагностика (с cookies)', description: 'Гоняет probe воркера/прокси с cookies плагина и показывает сводку' },
+onChange: function () {
+if (transportMode() !== 'proxy') { Lampa.Noty.show('Probe: нужен режим прокси'); return; }
+Lampa.Noty.show('Probe: выполняю…');
+fetch(proxyUrl() + '?probe=1&r=' + encodeURIComponent('series/action/66163-dzhentlmeny-2024-latest.html') + '&m=' + encodeURIComponent(mirror()), { headers: { 'X-Rezka-Cookie': jarGet() } })
+.then(function (r) { return r.json(); })
+.then(function (d) {
+var ok = (d.probes || []).filter(function (p) { return p.ok; }).map(function (p) { return p.name.slice(0, 2); });
+var p1 = (d.probes || [])[0] || {};
+Lampa.Noty.show('Probe: ok=[' + (ok.join(',') || 'нет') + '] P1=' + p1.status + ' «' + (p1.title || '') + '» len ' + p1.len);
+})
+.catch(function (e) { Lampa.Noty.show('Probe: ' + e.message, { style: 'error' }); });
+}
+});
+Lampa.SettingsApi.addParam({
+component: 'rezka',
 param: { name: 'rezka_sync', type: 'trigger', default: false },
 field: { name: 'Синхронизация истории с rezka', description: 'Экспериментально: ajax/send_watching' },
 onChange: function (v) { stSet('sync', v ? 'true' : ''); }
@@ -1322,7 +1343,9 @@ Lampa.Template.add('rezka_css', '<style>' +
 '.rezka-page>.scroll{height:100%}' +
 '.rezka-section{font-size:1.3em;color:#9a9a9a;margin:1.2em 0 .8em}' +
 '.rezka-note{color:#888;padding:.6em 0}' +
-'.rezka-grid{display:flex;flex-wrap:wrap}' +
+'.rezka-grid{display:flex;flex-wrap:wrap;align-items:flex-start}' +
+'.rezka-more{margin:0 0 1.8em 0;padding:.85em 2.4em;background:#232323;border-radius:.7em;color:#9a9a9a;font-size:.95em}' +
+'.rezka-more.focus{color:#fff;box-shadow:0 0 0 .2em #fff}' +
 '.rezka-rows{display:flex;flex-direction:column;width:100%}' +
 '.rezka-rowbox{margin-bottom:1.2em}' +
 '.rezka-card{width:12em;margin:0 1.4em 1.8em 0}' +
@@ -1384,7 +1407,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.2.0',
+version: '4.3.0',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: каскад зеркал, ленты с догрузкой, озвучки, серии, история',
 component: COMP_MAIN,
