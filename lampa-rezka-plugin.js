@@ -1,9 +1,10 @@
 /**
-HDREZKA for Lampa/Luxo — v4.9.0
-= v4.8.1 + применённые патчи 4.8.2 (extract URL, sanitize) + history-guard с try/catch
-+ НОВОЕ: карта качеств из ответа CDN ("[360p]url or [720p]url or …"), переключение в плеере,
-  настройка стартового качества (Авто=макс), мета-таблица карточки (рейтинги/страна/жанры/…),
-  санитизация meta на границе плеер/плейлист/история (fix cloneS2 stack overflow).
+HDREZKA for Lampa/Luxo — v4.10.0
+= v4.9 + JSON.stringify RangeError guard (fix WebKit "Maximum call stack size exceeded"
+в mixState/pushState/clone$2 ядра Lampa при открытии Select),
++ Select onSelect отвязан от re-render через setTimeout(0),
++ блок «Франшиза/Сага/Все фильмы» с карточки rezka (номер/название/год/рейтинг),
++ мета-блок в стиле Lampa (label/value), метка стартового качества в заголовке плеера.
 Worker v10 / локальный прокси v2 — без изменений.
 */
 (function () {
@@ -12,6 +13,41 @@ if (window.rezka_plugin_ready) return;
 window.rezka_plugin_ready = true;
 var COMP_MAIN = 'rezka_main', COMP_LIST = 'rezka_list', COMP_CARD = 'rezka_card';
 function log() { try { console.log.apply(console, ['[rezka]'].concat([].slice.call(arguments))); } catch (e) {} }
+
+// ==================== ПРЕДОХРАНИТЕЛИ ЯДРА (ставятся ДО всего) ====================
+// WebKit (Apple TV) на циклических объектах кидает RangeError из JSON.stringify,
+// ядро Lampa клонирует state через JSON.parse(JSON.stringify()) -> падение всего приложения.
+// Обёртка: нормальные вызовы проходят как раньше; при RangeError отдаём '{}' (state пуст,
+// история теряет один шаг, но приложение и Select продолжают работать).
+(function () {
+try {
+var origStringify = JSON.stringify;
+JSON.stringify = function (value, replacer, space) {
+try { return origStringify.call(JSON, value, replacer, space); }
+catch (e) {
+if (e && e.name === 'RangeError') return '{}';
+throw e;
+}
+};
+} catch (e) {}
+})();
+// rate-limit + глотание исключений history (SecurityError >100 replaceState/10s)
+(function () {
+try {
+var LIMIT = 60, WINDOW = 10000, t0 = Date.now(), cnt = 0;
+function guard(fn) {
+return function () {
+var n = Date.now();
+if (n - t0 > WINDOW) { t0 = n; cnt = 0; }
+cnt++;
+if (cnt > LIMIT) return undefined;
+try { return fn.apply(this, arguments); } catch (e) { return undefined; }
+};
+}
+if (window.history && typeof history.replaceState === 'function') history.replaceState = guard(history.replaceState.bind(history));
+if (window.history && typeof history.pushState === 'function') history.pushState = guard(history.pushState.bind(history));
+} catch (e) {}
+})();
 
 // ==================== ХРАНИЛИЩЕ / УТИЛИТЫ ====================
 function stGet(k, d) { return Lampa.Storage.get('rezka_' + k, d === undefined ? '' : d); }
@@ -366,6 +402,44 @@ if (k && v && !info[k]) info[k] = v;
 } catch (e) {}
 return info;
 }
+// Франшиза / сага / «все фильмы …»: ищем заголовок-секцию и ссылки внутри её контейнера
+function parseFranchise(html) {
+var res = { title: '', items: [] };
+try {
+var doc = new DOMParser().parseFromString(html, 'text/html');
+var KW = /все\s+(фильмы|проекты|сезоны)|сага|вселенн|франшиз|спин-?офф|цикл\s+фильмов/i;
+var heads = nodeList('h2, h3, h4, [class*="section__title"], [class*="post__section"]', doc);
+for (var hI = 0; hI < heads.length; hI++) {
+var ht = cleanTitle(textOf(heads[hI]));
+if (!ht || !KW.test(ht)) continue;
+var container = heads[hI].parentNode;
+for (var up = 0; up < 2 && container; up++) {
+if (nodeList('a[href*=".html"]', container).length >= 2) break;
+container = container.parentNode;
+}
+if (!container) continue;
+var seen = {};
+nodeList('a[href*=".html"]', container).forEach(function (a) {
+var href = (a.getAttribute('href') || '').split('#')[0];
+var t = cleanTitle(textOf(a));
+if (!t || href.indexOf('.html') < 0 || seen[href]) return;
+seen[href] = 1;
+var rowScope = a.closest ? (a.closest('tr') || a.closest('li') || a.parentNode) : a.parentNode;
+var rowText = cleanTitle(textOf(rowScope || a));
+var ym = rowText.match(/(19|20)\d{2}/);
+var rt = rowText.match(/\b\d[.,]\d{1,2}\b/);
+res.items.push({
+url: relOf(href), title: t,
+year: ym ? ym[0] : '',
+rating: rt ? rt[0].replace(',', '.') : ''
+});
+});
+if (res.items.length) { res.title = ht; break; }
+}
+res.items = res.items.slice(0, 40);
+} catch (e) {}
+return res;
+}
 function parseCardHtml(html, rel, base) {
 var doc = new DOMParser().parseFromString(html, 'text/html');
 var m = rel.match(/\/(\d+)-/);
@@ -413,10 +487,11 @@ var contentId = pid ? pid.getAttribute('value') : (m ? m[1] : null);
 if (!contentId) { var mn = html.match(/news_id=["']?(\d{3,7})["']?/); if (mn) contentId = mn[1]; }
 var card_descr = textOf(doc.querySelector('.b-post__description'));
 if (!card_descr) card_descr = (doc.querySelector('meta[property="og:description"]') ? doc.querySelector('meta[property="og:description"]').getAttribute('content') : '') || textOf(doc.querySelector('[class*="descr"]'));
+var fr = parseFranchise(html);
 return {
 rel: rel, contentId: contentId, title: title, poster: poster,
 descr: card_descr || '', translators: translators, seasons: seasons,
-info: parseCardInfo(doc),
+info: parseCardInfo(doc), franchiseTitle: fr.title, franchise: fr.items,
 isSerial: rel.indexOf('/series/') >= 0, user_hash: ''
 };
 }
@@ -432,7 +507,7 @@ eps[sid].push({ id: m[1], title: cleanTitle(stripTags(m[2])) || ('Серия ' +
 return eps;
 }
 
-// ==================== КАЧЕСТВО (формат CDN 2026: "[360p]url or [720p]url or …") ====================
+// ==================== КАЧЕСТВО ====================
 function parseQualityList(raw) {
 var map = {};
 if (!raw) return map;
@@ -452,6 +527,10 @@ var nums = Object.keys(map).filter(function (k) { return /^\d+p/.test(k); })
 if (nums.length) return map[nums[0]];
 var any = Object.keys(map);
 return any.length ? map[any[0]] : '';
+}
+function labelOfUrl(map, url) {
+for (var k in map) if (map[k] === url) return k;
+return '';
 }
 function decodeRezkaUrl(encoded) {
 var urls = [];
@@ -500,7 +579,7 @@ var q = buildQuality(m[1]);
 return Object.keys(q).length ? q : null;
 }
 
-// ==================== САНТИЗАЦИЯ META (fix cloneS2 stack overflow) ====================
+// ==================== САНТИЗАЦИЯ META ====================
 function liteCard(card) {
 if (!card) return null;
 return {
@@ -690,10 +769,12 @@ apiStream(meta._card, meta.voice_id, meta.season, meta.episode, function (qualit
 Lampa.Loading.stop();
 var keys = Object.keys(quality);
 if (!keys.length) { Lampa.Noty.show('Rezka: не удалось получить ссылку', { style: 'error' }); return; }
+var initial = pickInitial(quality);
+var qlabel = labelOfUrl(quality, initial) || 'AUTO';
 meta.hash = hashFor(meta);
 var file = {
-title: meta.title + (meta.season ? ' (S' + meta.season + ' E' + meta.episode + ')' : ''),
-url: pickInitial(quality),
+title: meta.title + (meta.season ? ' (S' + meta.season + ' E' + meta.episode + ')' : '') + ' · ' + qlabel,
+url: initial,
 quality: quality,
 subtitles: [],
 isonline: true,
@@ -1093,6 +1174,7 @@ return {
 rel: rel, contentId: m ? m[1] : null,
 title: meta.title || 'Загрузка…', poster: meta.poster || '',
 descr: meta.info || '', translators: [], seasons: [], info: {},
+franchiseTitle: '', franchise: [],
 isSerial: meta.type === 'serial' || rel.indexOf('/series/') >= 0,
 _html: '', _mirror: '', user_hash: ''
 };
@@ -1154,8 +1236,9 @@ scroll.append($('<div class="rezka-head">' +
 '<div class="rezka-head__descr">' + esc(card.descr) + '</div></div></div>'));
 var infoHtml = '';
 INFO_KEYS.forEach(function (k) {
-if (card.info && card.info[k]) infoHtml += '<div class="rezka-info__row"><span class="rezka-info__k">' + esc(k) + ':</span> ' + esc(card.info[k]) + '</div>';
+if (card.info && card.info[k]) infoHtml += '<div class="rezka-info__row"><span class="rezka-info__k">' + esc(k) + '</span><span class="rezka-info__v">' + esc(card.info[k]) + '</span></div>';
 });
+infoHtml += '<div class="rezka-info__row"><span class="rezka-info__k">Старт. качество</span><span class="rezka-info__v">' + esc(stGet('quality', 'auto') === 'auto' ? 'авто (макс.)' : stGet('quality', 'auto')) + '</span></div>';
 if (infoHtml) scroll.append($('<div class="rezka-info">' + infoHtml + '</div>'));
 if (card._htmlFail) scroll.append($('<div class="rezka-note">HTML карточки не получен: ' + esc(snippet(card._htmlFail, 120)) + '</div>'));
 var btns = $('<div class="rezka-btns"></div>');
@@ -1187,7 +1270,8 @@ onSelect: function (s) {
 Lampa.Select.close();
 for (var i = 0; i < card.translators.length; i++) if (card.translators[i].title === s.title) voiceIdx = i;
 stSet('last_voice', s.title);
-loadEpisodes(function () { render(); });
+// defer: не пересекаемся с history-операциями Select (fix stack overflow)
+setTimeout(function () { loadEpisodes(function () { render(); nav(); }); }, 0);
 },
 onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); }
 });
@@ -1204,7 +1288,7 @@ items: card.seasons.map(function (s) { return { title: s.title, id: s.id }; }),
 onSelect: function (s) {
 Lampa.Select.close();
 seasonId = s.id;
-loadEpisodes(function () { render(); });
+setTimeout(function () { loadEpisodes(function () { render(); nav(); }); }, 0);
 },
 onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); }
 });
@@ -1230,7 +1314,7 @@ Lampa.Select.close();
 lastEpId = String(s.id);
 var ep = null;
 for (var i = 0; i < episodes.length; i++) if (String(episodes[i].id) === lastEpId) ep = episodes[i];
-if (ep) ensureAuth(function () { playEpisode(ep); });
+if (ep) setTimeout(function () { ensureAuth(function () { playEpisode(ep); }); }, 0);
 },
 onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); }
 });
@@ -1238,6 +1322,29 @@ onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); 
 btns.append(bE);
 }
 scroll.append(btns);
+if (card.franchise && card.franchise.length) {
+scroll.append(sectionTitle(card.franchiseTitle || 'Франшиза'));
+var fg = $('<div class="rezka-rows"></div>');
+card.franchise.forEach(function (f, i) {
+var rv = parseFloat(f.rating || '0');
+var rcls = !f.rating ? ' none' : (rv >= 7 ? ' good' : (rv < 5 ? ' bad' : ''));
+var row = $('<div class="rezka-fr selector">' +
+'<div class="rezka-fr__n">' + (i + 1) + '</div>' +
+'<div class="rezka-fr__t">' + esc(f.title) + '</div>' +
+'<div class="rezka-fr__y">' + esc(f.year || '') + '</div>' +
+'<div class="rezka-fr__r' + rcls + '">' + esc(f.rating || '—') + '</div>' +
+'</div>');
+row.on('hover:focus', function () { setLast(row); scroll.update(row, true); });
+row.on('hover:enter', function () {
+Lampa.Activity.push({
+url: '', title: f.title, component: COMP_CARD,
+card_url: f.url, card_meta: { title: f.title, year: f.year, poster: '' }, page: 1
+});
+});
+fg.append(row);
+});
+scroll.append(fg);
+}
 nav();
 }
 function afterCard() {
@@ -1260,6 +1367,8 @@ card.descr = parsed.descr || card.descr;
 card.translators = parsed.translators;
 card.seasons = parsed.seasons;
 card.info = parsed.info || {};
+card.franchiseTitle = parsed.franchiseTitle || '';
+card.franchise = parsed.franchise || [];
 card._html = html;
 card._mirror = mHost;
 afterCard();
@@ -1419,7 +1528,7 @@ onChange: function (v) { stSet('transport', v); }
 Lampa.SettingsApi.addParam({
 component: 'rezka',
 param: { name: 'rezka_quality_sel', type: 'select', values: { auto: 'Авто (максимальное)', '1080p': '1080p', '720p': '720p', '480p': '480p', '360p': '360p' }, default: 'auto' },
-field: { name: 'Стартовое качество', description: 'С какого качества начинать; в плеере переключается на лету' },
+field: { name: 'Стартовое качество', description: 'С какого качества начинать; метка видна в заголовке плеера' },
 onChange: function (v) { stSet('quality', v); }
 });
 Lampa.SettingsApi.addParam({
@@ -1495,9 +1604,20 @@ Lampa.Template.add('rezka_css', '<style>' +
 '.rezka-head__poster img{width:100%;height:100%;object-fit:cover}' +
 '.rezka-head__title{font-size:1.8em;margin-bottom:.6em}' +
 '.rezka-head__descr{color:#a5a5a5;line-height:1.45;max-height:14em;overflow:hidden}' +
-'.rezka-info{margin:0 0 1.2em;color:#a5a5a5;line-height:1.55;font-size:.95em}' +
-'.rezka-info__row{margin-bottom:.25em}' +
-'.rezka-info__k{color:#8a8a8a}' +
+'.rezka-info{margin:0 0 1.2em;background:#1f1f1f;border-radius:.7em;padding:.9em 1.2em}' +
+'.rezka-info__row{display:flex;margin-bottom:.35em;font-size:.95em;line-height:1.4}' +
+'.rezka-info__row:last-child{margin-bottom:0}' +
+'.rezka-info__k{flex:0 0 11em;color:#7d7d7d}' +
+'.rezka-info__v{flex:1;color:#cfcfcf}' +
+'.rezka-fr{display:flex;align-items:center;width:100%;padding:.7em 1.1em;background:#232323;border-radius:.6em;margin-bottom:.45em;box-sizing:border-box}' +
+'.rezka-fr.focus{box-shadow:0 0 0 .2em #fff}' +
+'.rezka-fr__n{flex:0 0 2.2em;color:#6f6f6f}' +
+'.rezka-fr__t{flex:1;min-width:0;color:#e8e8e8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+'.rezka-fr__y{flex:0 0 5.5em;color:#8a8a8a;text-align:right}' +
+'.rezka-fr__r{flex:0 0 3.4em;margin-left:.8em;text-align:center;border-radius:.35em;background:#5a5a5a;color:#fff;font-size:.9em}' +
+'.rezka-fr__r.good{background:#2e7d32}' +
+'.rezka-fr__r.bad{background:#c62828}' +
+'.rezka-fr__r.none{background:#3a3a3a;color:#9a9a9a}' +
 '.rezka-cont{display:flex;align-items:center;width:100%;padding:.8em 1.2em;background:#232323;border-radius:.6em;margin-bottom:.5em;box-sizing:border-box}' +
 '.rezka-cont.focus{box-shadow:0 0 0 .2em #fff}' +
 '.rezka-cont--head{background:transparent;color:#9a9a9a;padding:.4em 1.2em;margin-bottom:.2em}' +
@@ -1528,36 +1648,15 @@ if (tries > 20) clearInterval(iv);
 }, 1000);
 }
 function init() {
-// предохранитель history: rate-limit + глотание исключений (SecurityError/RangeError)
-(function () {
-try {
-var LIMIT = 60, WINDOW = 10000, t0 = Date.now(), cnt = 0;
-function guard(fn) {
-return function () {
-var n = Date.now();
-if (n - t0 > WINDOW) { t0 = n; cnt = 0; }
-cnt++;
-if (cnt > LIMIT) return undefined;
-try { return fn.apply(this, arguments); } catch (e) { return undefined; }
-};
-}
-if (window.history && typeof history.replaceState === 'function') {
-history.replaceState = guard(history.replaceState.bind(history));
-}
-if (window.history && typeof history.pushState === 'function') {
-history.pushState = guard(history.pushState.bind(history));
-}
-} catch (e) {}
-})();
 addCss();
 Lampa.Component.add(COMP_MAIN, RezkaMain);
 Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.9.0',
+version: '4.10.0',
 name: 'HDREZKA Lab',
-description: 'Фильмы и сериалы с rezka: карусели, качества, мета, озвучки, серии, история',
+description: 'Фильмы и сериалы с rezka: карусели, качества, мета, франшизы, озвучки, серии, история',
 component: COMP_MAIN,
 onContextMenu: function () { return { title: 'Смотреть на HDREZKA' }; },
 onContextLauch: function (card) {
