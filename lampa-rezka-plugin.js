@@ -1,10 +1,10 @@
 /**
-HDREZKA for Lampa/Luxo — v4.12.0
-= v4.11 + финальный UI-полиш:
- (1) аватары актёров из /person/… (фоновая загрузка + кэш person_imgs),
- (2) детерминированный возврат фокуса после Select (data-fk метки кнопок),
- (3) выбор серии НЕ запускает плеер — только выбор; старт кнопкой «Смотреть»,
- (4) франшиза/сага парсится по якорю a[href*="/franchises/"] (блок-ссылка на карточке).
+HDREZKA for Lampa/Luxo — v4.13.0
+= v4.12 + fixes:
+ (1) focusRestore через официальный путь Controller.toggle('content') — нет заморозки влево/вправо после модалок;
+ (2) parseActors: контейнер актёра = минимальный предок с ровно одной ссылкой /person/ — аватары не дублируются;
+ (3) франшиза: фильтр соцсетей и мусорных заголовков, имя секции как на rezka, постеры+годы одним запросом страницы /franchises/…;
+ (4) вход в актёра = его страница /person/… списком фильмов с постерами (COMP_LIST + person).
 Worker v10 / локальный прокси v2 — без изменений.
 */
 (function () {
@@ -403,57 +403,73 @@ if (k && v && !info[k]) info[k] = v;
 } catch (e) {}
 return info;
 }
-// Франшиза/сага: блок-ссылка на карточке ведёт на /franchises/… (или /collections/…)
+// Франшиза/подборка: блок-ссылка /franchises/… или /collections/…;
+// фильтруем соцсети/шеринги и мусорные заголовки; постеры добираются со страницы франшизы.
 function parseFranchise(html) {
-var res = { title: '', items: [] };
+var res = { title: '', url: '', items: [] };
+var BADH = /share|social|vk\.com|viber|facebook|ok\.ru|whatsapp|wa\.me|t\.me|twitter|x\.com|telegram|mail\.ru/i;
+var BADT = /^(фильм|сериал|мультфильм|аниме|трейлер|смотреть|смотреть онлайн|все фильмы|все сериалы|все проекты)$/i;
+function okHref(href) {
+if (!href || href.indexOf('.html') < 0) return false;
+if (BADH.test(href)) return false;
+if (/^https?:\/\//i.test(href)) {
+try { var u = new URL(href); if (!/rezka\.|hdrezka\./i.test(u.host)) return false; }
+catch (e) { return false; }
+}
+return true;
+}
 try {
 var doc = new DOMParser().parseFromString(html, 'text/html');
-function collectFrom(cont, title) {
+function collectFrom(cont) {
 var seen = {};
-var links = nodeList('a[href*=".html"]', cont);
-if (links.length < 2) return false;
-links.forEach(function (l) {
+var added = 0;
+nodeList('a[href*=".html"]', cont).forEach(function (l) {
 var href = (l.getAttribute('href') || '').split('#')[0];
+if (!okHref(href)) return;
 var lt = cleanTitle(textOf(l));
-if (!lt || seen[href]) return;
-seen[href] = 1;
+if (!lt || lt.length < 3 || BADT.test(lt)) return;
+var key = relOf(href);
+if (seen[key]) return;
+seen[key] = 1;
 var rowScope = l.closest ? (l.closest('tr') || l.closest('li') || l.parentNode) : l.parentNode;
 var rowText = cleanTitle(textOf(rowScope || l));
 var ym = rowText.match(/(19|20)\d{2}/);
 var rt = rowText.match(/\b\d[.,]\d{1,2}\b/);
 res.items.push({
-url: relOf(href), title: lt,
-year: ym ? ym[0] : '',
-rating: rt ? rt[0].replace(',', '.') : ''
+url: key, title: lt, year: ym ? ym[0] : '',
+rating: rt ? rt[0].replace(',', '.') : '', poster: ''
 });
+added++;
 });
 res.items = res.items.slice(0, 40);
-res.title = title;
-return res.items.length > 0;
+return added > 0;
 }
 var anchors = nodeList('a[href*="/franchises/"], a[href*="/collections/"]', doc);
 for (var i = 0; i < anchors.length; i++) {
-var t = cleanTitle(textOf(anchors[i]));
+var t = cleanTitle(textOf(anchors[i])).replace(/:$/, '');
 if (!t || t.length > 90) continue;
 var cont = anchors[i].parentNode;
 for (var up = 0; up < 4 && cont; up++) {
 if (nodeList('a[href*=".html"]', cont).length >= 2) break;
 cont = cont.parentNode;
 }
-if (cont && collectFrom(cont, t)) return res;
+if (cont && collectFrom(cont)) {
+res.title = t;
+res.url = relOf(anchors[i].getAttribute('href'));
+return res;
 }
-// fallback: заголовки-секции
+}
 var KW = /все\s+(фильмы|проекты|сезоны)|сага|вселенн|франшиз|спин-?офф|цикл\s+фильмов/i;
 var heads = nodeList('h2, h3, h4, [class*="section__title"], [class*="post__section"]', doc);
 for (var hI = 0; hI < heads.length; hI++) {
-var ht = cleanTitle(textOf(heads[hI]));
+var ht = cleanTitle(textOf(heads[hI])).replace(/:$/, '');
 if (!ht || !KW.test(ht)) continue;
 var c2 = heads[hI].parentNode;
 for (var up2 = 0; up2 < 3 && c2; up2++) {
 if (nodeList('a[href*=".html"]', c2).length >= 2) break;
 c2 = c2.parentNode;
 }
-if (c2 && collectFrom(c2, ht)) return res;
+if (c2 && collectFrom(c2)) { res.title = ht; return res; }
 }
 } catch (e) {}
 return res;
@@ -475,6 +491,21 @@ if (cont) return parseList(cont.innerHTML).slice(0, 14);
 } catch (e) {}
 return [];
 }
+// Контейнер актёра = минимальный предок, где ровно ОДНА ссылка /person/ (иначе чужая ссылка/фото)
+function personLinkFor(el) {
+var n = el;
+for (var u = 0; u < 4 && n; u++) {
+var as = nodeList('a[href*="/person/"]', n);
+if (as.length === 1) return as[0];
+if (as.length > 1) break;
+n = n.parentNode;
+}
+if (el.closest) {
+var c = el.closest('a[href*="/person/"]');
+if (c) return c;
+}
+return null;
+}
 function parseActors(doc, base) {
 var actors = [];
 try {
@@ -488,12 +519,7 @@ if (cont.querySelector && cont.querySelector('img')) break;
 cont = cont.parentNode;
 }
 var img = cont && cont.querySelector ? cont.querySelector('img') : null;
-var a = el.closest ? el.closest('a[href*="/person/"]') : null;
-if (!a && cont && cont.querySelector) a = cont.querySelector('a[href*="/person/"]');
-if (!a) {
-var pa = el.querySelector ? el.querySelector('a[href*="/person/"]') : null;
-if (pa) a = pa;
-}
+var a = personLinkFor(el);
 actors.push({
 name: name,
 img: img ? absUrl(img.getAttribute('src') || img.getAttribute('data-src') || '', base) : '',
@@ -571,7 +597,7 @@ kp: kpM ? kpM[1] : '',
 genres: (info['Жанр'] || '').split(',').map(cleanTitle).filter(Boolean),
 actors: parseActors(doc, base),
 similar: parseSimilar(html),
-franchiseTitle: fr.title, franchise: fr.items,
+franchiseTitle: fr.title, franchise: fr.items, franchiseUrl: fr.url,
 isSerial: rel.indexOf('/series/') >= 0, user_hash: ''
 };
 }
@@ -1026,17 +1052,18 @@ card_url: it.url, card_meta: it, resume: resume ? it : undefined, page: 1
 });
 }
 function btnEl(label) { return $('<div class="rezka-btn selector">' + esc(label) + '</div>'); }
-function actorEl(a) {
-return $('<div class="rezka-actor selector" data-purl="' + esc(a.purl || '') + '">' +
+function actorEl(a, idx) {
+return $('<div class="rezka-actor selector" data-aidx="' + idx + '" data-purl="' + esc(a.purl || '') + '">' +
 '<div class="rezka-actor__ph">' + (a.img ? '<img src="' + esc(a.img) + '" loading="lazy">' : '') + '</div>' +
 '<div class="rezka-actor__n">' + esc(a.name) + '</div></div>');
 }
 function frCardEl(f) {
 var rv = parseFloat(f.rating || '0');
 var rcls = !f.rating ? '' : (rv >= 7 ? ' good' : (rv < 5 ? ' bad' : ''));
-return $('<div class="rezka-frcard selector">' +
+return $('<div class="rezka-frcard selector" data-furl="' + esc(f.url) + '">' +
+'<div class="rezka-frcard__p">' + (f.poster ? '<img src="' + esc(f.poster) + '" loading="lazy">' : '') + '</div>' +
 '<div class="rezka-frcard__t">' + esc(f.title) + '</div>' +
-'<div class="rezka-frcard__m"><span>' + esc(f.year || '—') + '</span>' +
+'<div class="rezka-frcard__m"><span class="rezka-frcard__y">' + esc(f.year || '—') + '</span>' +
 '<span class="rezka-frcard__r' + rcls + '">' + esc(f.rating || '—') + '</span></div></div>');
 }
 
@@ -1198,7 +1225,7 @@ this.empty = function () {};
 makeController(this, scroll, function () { return last; });
 }
 
-// ==================== ЭКРАН: СПИСОК ====================
+// ==================== ЭКРАН: СПИСОК (каталог / поиск / фильмография актёра) ====================
 function RezkaList(object) {
 var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
 var wrap = pageWrap(scroll);
@@ -1206,6 +1233,7 @@ var last = false, page = object.page || 1, inited = false;
 function setLast(el) { last = el; }
 function nav() { refreshNav(scroll, COMP_LIST, function () { return last; }); }
 function rel() {
+if (object.person) return nextRel(object.person, page);
 if (object.search) return searchRel(object.search, page);
 var base = object.section || 'films/';
 return page > 1 ? base + 'page/' + page + '/' : base;
@@ -1264,22 +1292,24 @@ last = el;
 try { var fk = el.attr ? el.attr('data-fk') : ''; if (fk) focusKey = fk; } catch (e) {}
 }
 function nav() { refreshNav(scroll, COMP_CARD, function () { return last; }); }
-// детерминированный возврат фокуса после перерисовки (после Select и т.п.)
+// возврат фокуса ТОЛЬКО официальным путём: last=целевая кнопка + Controller.toggle('content')
 function focusRestore() {
 setTimeout(function () {
 try {
 var r = scroll.render();
-Lampa.Controller.collectionSet(r);
 var cur = r.find('.focus').first();
 var detached = !cur.length || !document.contains(cur[0]);
 if (needFocusRestore || detached) {
 var t = r.find('[data-fk="' + focusKey + '"]').first();
 if (!t.length) t = r.find('.selector').first();
-if (t.length) Lampa.Controller.collectionFocus(t, r);
+if (t.length) {
+last = t;
+Lampa.Controller.toggle('content');
+}
 needFocusRestore = false;
 }
 } catch (e) {}
-}, 40);
+}, 80);
 }
 function initialCard() {
 var rel = object.card_url || meta.url || '';
@@ -1290,7 +1320,7 @@ title: meta.title || 'Загрузка…', poster: meta.poster || '',
 descr: meta.info || '', translators: [], seasons: [], info: {},
 origTitle: '', year: meta.year || '', country: '', quality: '', age: '', duration: '',
 imdb: '', kp: '', genres: [], actors: [], similar: [],
-franchiseTitle: '', franchise: [],
+franchiseTitle: '', franchise: [], franchiseUrl: '',
 isSerial: meta.type === 'serial' || rel.indexOf('/series/') >= 0,
 _html: '', _mirror: '', user_hash: ''
 };
@@ -1341,20 +1371,21 @@ if (!card.poster) for (i = 0; i < items.length; i++) if (norm(items[i].title) ==
 render();
 }, function () {});
 }
-// аватары актёров: кэш + фоновая догрузка со страниц /person/…
-function applyActorImg(a) {
+function applyActorImg(a, idx) {
 try {
-if (!a.purl || !a.img) return;
-var ph = scroll.render().find('.rezka-actor[data-purl="' + a.purl + '"] .rezka-actor__ph');
+if (!a.img) return;
+var ph = scroll.render().find('.rezka-actor[data-aidx="' + idx + '"] .rezka-actor__ph');
 if (ph.length && !ph.find('img').length) ph.html('<img src="' + esc(a.img) + '" loading="lazy">');
 } catch (e) {}
 }
+// аватары актёров: кэш + фоновая догрузка со страниц /person/… (привязка по индексу, не по селектору)
 function loadActorImgs() {
 var cache = personImgCache();
 var queue = [];
-(card.actors || []).forEach(function (a) {
+(card.actors || []).forEach(function (a, i) {
+a._idx = i;
 if (a.img || !a.purl) return;
-if (cache[a.purl]) { a.img = cache[a.purl]; applyActorImg(a); return; }
+if (cache[a.purl]) { a.img = cache[a.purl]; applyActorImg(a, i); return; }
 queue.push(a);
 });
 queue = queue.slice(0, 10);
@@ -1376,11 +1407,38 @@ if (url) {
 cache[a.purl] = url;
 personImgSave(cache);
 a.img = url;
-applyActorImg(a);
+applyActorImg(a, a._idx);
 }
 step();
 }, function () { step(); });
 })();
+}
+// постеры/годы франшизы одним запросом страницы франшизы, вставка на месте без перерисовки
+function loadFranchisePosters() {
+if (!card.franchiseUrl || !card.franchise || !card.franchise.length) return;
+getText(card.franchiseUrl, { method: 'GET' }, function (html2) {
+if (!inited) return;
+var list2 = parseList(html2);
+var mapP = {};
+list2.forEach(function (it) { mapP[it.url] = it; });
+card.franchise.forEach(function (f) {
+var src = mapP[f.url];
+if (!src) return;
+f.poster = src.poster || f.poster;
+f.year = f.year || src.year;
+try {
+var root = scroll.render();
+if (f.poster) {
+var ph = root.find('.rezka-frcard[data-furl="' + f.url + '"] .rezka-frcard__p');
+if (ph.length && !ph.find('img').length) ph.html('<img src="' + esc(f.poster) + '" loading="lazy">');
+}
+if (f.year) {
+var yr = root.find('.rezka-frcard[data-furl="' + f.url + '"] .rezka-frcard__y');
+if (yr.length) yr.text(f.year);
+}
+} catch (e) {}
+});
+}, function () {});
 }
 function hRow(title, items, builder, onEnter) {
 if (!items || !items.length) return;
@@ -1388,8 +1446,8 @@ var box = $('<div class="rezka-rowbox"></div>');
 box.append(sectionTitle(title));
 var h = new Lampa.Scroll({ horizontal: true, mask: true, over: true, step: 300 });
 var line = $('<div class="rezka-line"></div>');
-items.forEach(function (it) {
-var el = builder(it);
+items.forEach(function (it, i) {
+var el = builder(it, i);
 el.on('hover:focus', function () {
 setLast(el);
 h.update(el, true);
@@ -1505,7 +1563,6 @@ var p = percentOf(m2);
 return { title: (e.title || ('Серия ' + e.id)) + (p ? ' — ' + Math.round(p) + '%' : ''), id: e.id };
 }),
 onSelect: function (s) {
-// ТОЛЬКО выбор: плеер стартует кнопкой «Смотреть»
 Lampa.Select.close();
 lastEpId = String(s.id);
 focusKey = 'episode';
@@ -1521,11 +1578,15 @@ scroll.append(btns);
 hRow(card.franchiseTitle || 'Франшиза', card.franchise, frCardEl, function (f) {
 Lampa.Activity.push({
 url: '', title: f.title, component: COMP_CARD,
-card_url: f.url, card_meta: { title: f.title, year: f.year, poster: '' }, page: 1
+card_url: f.url, card_meta: { title: f.title, year: f.year, poster: f.poster }, page: 1
 });
 });
 hRow('В ролях', card.actors, actorEl, function (a) {
+if (a.purl) {
+Lampa.Activity.push({ url: '', title: a.name, component: COMP_LIST, person: a.purl, page: 1 });
+} else {
 Lampa.Activity.push({ url: '', title: a.name, component: COMP_LIST, search: a.name, page: 1 });
+}
 });
 hRow('Похожее', card.similar, function (it) { return cardEl(it, false); }, function (it) {
 Lampa.Activity.push({
@@ -1543,6 +1604,7 @@ var tgt = object.resume || histGet().filter(function (h) { return h.url === card
 seasonId = tgt && tgt.season ? String(tgt.season) : '';
 lastEpId = tgt && tgt.episode ? String(tgt.episode) : '';
 if (!card.poster) enrichPoster();
+loadFranchisePosters();
 if (card.isSerial) loadEpisodes(function () { if (inited) render(); });
 else if (inited) render();
 }
@@ -1570,6 +1632,7 @@ card.actors = parsed.actors || [];
 card.similar = parsed.similar || [];
 card.franchiseTitle = parsed.franchiseTitle || '';
 card.franchise = parsed.franchise || [];
+card.franchiseUrl = parsed.franchiseUrl || '';
 card._html = html;
 card._mirror = mHost;
 afterCard();
@@ -1816,10 +1879,12 @@ Lampa.Template.add('rezka_css', '<style>' +
 '.rezka-actor__ph img{width:100%;height:100%;object-fit:cover}' +
 '.rezka-actor.focus .rezka-actor__ph{box-shadow:0 0 0 .25em #fff}' +
 '.rezka-actor__n{font-size:.9em;margin-top:.5em;min-height:2.2em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}' +
-'.rezka-frcard{width:13em;margin:0 1.2em 1.2em 0;background:#232323;border-radius:.7em;padding:.9em 1em;box-sizing:border-box}' +
+'.rezka-frcard{width:9em;margin:0 1.2em 1.2em 0;background:#232323;border-radius:.7em;padding:.7em;box-sizing:border-box}' +
 '.rezka-frcard.focus{box-shadow:0 0 0 .2em #fff}' +
-'.rezka-frcard__t{min-height:2.4em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:.95em}' +
-'.rezka-frcard__m{display:flex;justify-content:space-between;align-items:center;margin-top:.6em;color:#8a8a8a;font-size:.85em}' +
+'.rezka-frcard__p{width:7.6em;height:11em;border-radius:.5em;overflow:hidden;background:#1c1c1c;margin-bottom:.5em}' +
+'.rezka-frcard__p img{width:100%;height:100%;object-fit:cover}' +
+'.rezka-frcard__t{min-height:2.4em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:.9em}' +
+'.rezka-frcard__m{display:flex;justify-content:space-between;align-items:center;margin-top:.5em;color:#8a8a8a;font-size:.8em}' +
 '.rezka-frcard__r{padding:.1em .55em;border-radius:.35em;background:#5a5a5a;color:#fff}' +
 '.rezka-frcard__r.good{background:#2e7d32}' +
 '.rezka-frcard__r.bad{background:#c62828}' +
@@ -1881,9 +1946,9 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.12.0',
+version: '4.13.0',
 name: 'HDREZKA Lab',
-description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры с аватарами, качества',
+description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы с постерами, актёры, качества',
 component: COMP_MAIN,
 onContextMenu: function () { return { title: 'Смотреть на HDREZKA' }; },
 onContextLauch: function (card) {
