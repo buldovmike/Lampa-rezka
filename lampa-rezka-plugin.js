@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v4.5.0
+HDREZKA for Lampa/Luxo — v4.6.0
 FIX: per-host cookie jars (ag/hdrezka cookies больше не убивают сессию rezka.fi -> «Досмотреть» жив),
 focus-guard после Activity.push и после пагинации,
 горизонтальные карусели-ленты с автодозагрузкой у правого края (без кнопки «Ещё»),
@@ -524,6 +524,7 @@ var q = buildQuality(m[1]);
 return Object.keys(q).length ? q : null;
 }
 function apiStream(card, voiceId, season, episode, cb, fail) {
+log('apiStream called:', card.contentId, voiceId, season, episode, 'user_hash:', card.user_hash);
 var form = { id: card.contentId, translator_id: voiceId || '', action: 'get_stream', favs: '0' };
 if (card.user_hash) form.user_hash = card.user_hash;
 if (card.isSerial && season && episode) { form.season = season; form.episode = episode; }
@@ -534,6 +535,7 @@ if (q0 && !card.isSerial) { cb(q0); return; }
 fail(new Error((data && data.message) || 'сервер не вернул ссылку'));
 return;
 }
+log('stream response:', JSON.stringify(data).slice(0, 200));
 cb(buildQuality(data.url));
 }, function (e) {
 var q0 = streamFromHtml(card);
@@ -628,6 +630,7 @@ hash: meta.hash,
 timeline: Lampa.Timeline.view(meta.hash),
 rezka: meta
 };
+log('player.play file.url:', file.url, 'quality keys:', Object.keys(quality));
 Lampa.Player.play(file);
 if (playlist && playlist.length > 1) Lampa.Player.playlist(playlist);
 }, function (e) {
@@ -690,7 +693,11 @@ var w = $('<div class="rezka-page layer--wheight"></div>');
 w.append(scroll.render());
 return w;
 }
+var _navT = 0;
 function refreshNav(scroll, compName, getLast) {
+var now = Date.now();
+if (now - _navT < 120) return;
+_navT = now;
 try {
 var act = Lampa.Activity.active();
 if (!act || act.component !== compName) return;
@@ -833,9 +840,6 @@ setLast(el);
 h.update(el, true);
 var r = box[0].getBoundingClientRect();
 if (r.top < -10 || r.top > window.innerHeight - 140) scroll.update(box, false);
-var all = line.children('.rezka-card');
-var idx = all.index(el);
-if (!doneAll && !busy && idx >= all.length - 4) loadMore();
 });
 el.on('hover:enter', function () {
 Lampa.Activity.push({
@@ -1448,7 +1452,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.5.0',
+version: '4.6.0',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карусели, каскад зеркал, озвучки, серии, история',
 component: COMP_MAIN,
