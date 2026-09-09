@@ -1,10 +1,10 @@
 /**
-HDREZKA for Lampa/Luxo — v4.10.0
-= v4.9 + JSON.stringify RangeError guard (fix WebKit "Maximum call stack size exceeded"
-в mixState/pushState/clone$2 ядра Lampa при открытии Select),
-+ Select onSelect отвязан от re-render через setTimeout(0),
-+ блок «Франшиза/Сага/Все фильмы» с карточки rezka (номер/название/год/рейтинг),
-+ мета-блок в стиле Lampa (label/value), метка стартового качества в заголовке плеера.
+HDREZKA for Lampa/Luxo — v4.11.0
+FIX ROOT CAUSE: Lampa.Select на WebKit падает в ядре (close->hide->jQuery.removeClass,
+jquery.js:7822, RangeError). Все списки (озвучка/сезон/серии/история/уточнение поиска)
+переведены на собственный оверлей rzSelect (Lampa.Scroll + Lampa.Controller, без ядра Select).
++ hero-карточка в стиле Lampa: бейджи рейтингов/возраста/качества, слоган, жанры, «Подробно»,
+панель франшизы с подсветкой текущей части. Guards (stringify/history) сохранены.
 Worker v10 / локальный прокси v2 — без изменений.
 */
 (function () {
@@ -14,24 +14,16 @@ window.rezka_plugin_ready = true;
 var COMP_MAIN = 'rezka_main', COMP_LIST = 'rezka_list', COMP_CARD = 'rezka_card';
 function log() { try { console.log.apply(console, ['[rezka]'].concat([].slice.call(arguments))); } catch (e) {} }
 
-// ==================== ПРЕДОХРАНИТЕЛИ ЯДРА (ставятся ДО всего) ====================
-// WebKit (Apple TV) на циклических объектах кидает RangeError из JSON.stringify,
-// ядро Lampa клонирует state через JSON.parse(JSON.stringify()) -> падение всего приложения.
-// Обёртка: нормальные вызовы проходят как раньше; при RangeError отдаём '{}' (state пуст,
-// история теряет один шаг, но приложение и Select продолжают работать).
+// ==================== ПРЕДОХРАНИТЕЛИ ЯДРА ====================
 (function () {
 try {
 var origStringify = JSON.stringify;
 JSON.stringify = function (value, replacer, space) {
 try { return origStringify.call(JSON, value, replacer, space); }
-catch (e) {
-if (e && e.name === 'RangeError') return '{}';
-throw e;
-}
+catch (e) { if (e && e.name === 'RangeError') return '{}'; throw e; }
 };
 } catch (e) {}
 })();
-// rate-limit + глотание исключений history (SecurityError >100 replaceState/10s)
 (function () {
 try {
 var LIMIT = 60, WINDOW = 10000, t0 = Date.now(), cnt = 0;
@@ -268,6 +260,53 @@ getJson(rel, form, ref, onDone, function (e) { errs.push(hostOf(m) + ': ' + (e &
 next();
 }
 
+// ==================== СОБСТВЕННЫЙ ОВЕРЛЕЙ-СПИСОК (вместо Lampa.Select) ====================
+var rzSelectOpen = false;
+function rzSelect(opts) {
+if (rzSelectOpen) return null;
+rzSelectOpen = true;
+var items = opts.items || [];
+var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
+var box = $('<div class="rezka-sel layer--wheight"></div>');
+box.append($('<div class="rezka-sel__head">' + esc(opts.title || 'Выбор') + '</div>'));
+var list = $('<div class="rezka-sel__list"></div>');
+items.forEach(function (it, i) {
+var row = $('<div class="rezka-sel__item selector' + (it.active ? ' rezka-sel__item--active' : '') + '">' + esc(it.title || '') + '</div>');
+row.on('hover:focus', function () { scroll.update(row, true); });
+row.on('hover:enter', function () {
+close();
+if (opts.onSelect) opts.onSelect(it, i);
+});
+list.append(row);
+});
+scroll.append(list);
+box.append(scroll.render());
+function close() {
+if (!rzSelectOpen) return;
+rzSelectOpen = false;
+try { box.remove(); } catch (e) {}
+try { scroll.destroy(); } catch (e) {}
+Lampa.Controller.toggle('content');
+}
+$('body').append(box);
+Lampa.Controller.add('rezka_sel', {
+toggle: function () {
+Lampa.Controller.collectionSet(scroll.render());
+var f = scroll.render().find('.rezka-sel__item--active').first();
+if (!f.length) f = scroll.render().find('.selector').first();
+if (f.length) Lampa.Controller.collectionFocus(f, scroll.render());
+},
+left: function () { close(); if (opts.onBack) opts.onBack(); },
+right: function () {},
+up: function () { if (Navigator.canmove('up')) Navigator.move('up'); },
+down: function () { if (Navigator.canmove('down')) Navigator.move('down'); },
+back: function () { close(); if (opts.onBack) opts.onBack(); },
+destroy: function () {}
+});
+Lampa.Controller.toggle('rezka_sel');
+return { close: close };
+}
+
 // ==================== ПАРСЕРЫ ====================
 function parseList(html) {
 var out = [];
@@ -402,8 +441,7 @@ if (k && v && !info[k]) info[k] = v;
 } catch (e) {}
 return info;
 }
-// Франшиза / сага / «все фильмы …»: ищем заголовок-секцию и ссылки внутри её контейнера
-function parseFranchise(html) {
+function parseFranchise(html, selfRel) {
 var res = { title: '', items: [] };
 try {
 var doc = new DOMParser().parseFromString(html, 'text/html');
@@ -431,7 +469,8 @@ var rt = rowText.match(/\b\d[.,]\d{1,2}\b/);
 res.items.push({
 url: relOf(href), title: t,
 year: ym ? ym[0] : '',
-rating: rt ? rt[0].replace(',', '.') : ''
+rating: rt ? rt[0].replace(',', '.') : '',
+self: relOf(href) === selfRel
 });
 });
 if (res.items.length) { res.title = ht; break; }
@@ -452,6 +491,8 @@ if (!title) {
 var mh = html.match(/<h1[^>]*>([\s\S]{0,200}?)<\/h1>/i);
 if (mh) title = cleanTitle(stripTags(mh[1]));
 }
+var orig = textOf(doc.querySelector('.b-post__origtitle'));
+var tagline = '';
 var posterEl = doc.querySelector('.b-post__poster img') || doc.querySelector('img.b-post__image') ||
 doc.querySelector('meta[property="og:image"]') || doc.querySelector('link[rel="image_src"]');
 var poster = posterEl ? absUrl(posterEl.getAttribute('src') || posterEl.getAttribute('content') || posterEl.getAttribute('href') || '', base) : '';
@@ -487,11 +528,13 @@ var contentId = pid ? pid.getAttribute('value') : (m ? m[1] : null);
 if (!contentId) { var mn = html.match(/news_id=["']?(\d{3,7})["']?/); if (mn) contentId = mn[1]; }
 var card_descr = textOf(doc.querySelector('.b-post__description'));
 if (!card_descr) card_descr = (doc.querySelector('meta[property="og:description"]') ? doc.querySelector('meta[property="og:description"]').getAttribute('content') : '') || textOf(doc.querySelector('[class*="descr"]'));
-var fr = parseFranchise(html);
+var info = parseCardInfo(doc);
+tagline = (info['Слоган'] || '').replace(/^«|»$/g, '');
+var fr = parseFranchise(html, rel);
 return {
-rel: rel, contentId: contentId, title: title, poster: poster,
+rel: rel, contentId: contentId, title: title, orig: orig, tagline: tagline, poster: poster,
 descr: card_descr || '', translators: translators, seasons: seasons,
-info: parseCardInfo(doc), franchiseTitle: fr.title, franchise: fr.items,
+info: info, franchiseTitle: fr.title, franchise: fr.items,
 isSerial: rel.indexOf('/series/') >= 0, user_hash: ''
 };
 }
@@ -725,20 +768,13 @@ var scored = parseList(html)
 .sort(function (a, b) { return b._s - a._s; });
 if (!scored.length) { next(); return; }
 if (scored.length === 1 || scored[0]._s >= 4) { cb(scored[0]); return; }
-Lampa.Select.show({
+rzSelect({
 title: 'HDREZKA: выберите совпадение',
 items: scored.slice(0, 8).map(function (it) {
 return { title: it.title + (it.year ? ' (' + it.year + ')' : ''), url: it.url };
 }),
-onSelect: function (s) {
-Lampa.Select.close();
-cb({ url: s.url, title: s.title.replace(/\s*\(\d{4}\)\s*$/, '') });
-},
-onBack: function () {
-Lampa.Select.close();
-Lampa.Controller.toggle('content');
-fail(null, true);
-}
+onSelect: function (s) { cb({ url: s.url, title: s.title.replace(/\s*\(\d{4}\)\s*$/, '') }); },
+onBack: function () { fail(null, true); }
 });
 }, function () { next(); });
 }
@@ -946,6 +982,7 @@ card_url: it.url, card_meta: it, resume: resume ? it : undefined, page: 1
 });
 }
 function btnEl(label) { return $('<div class="rezka-btn selector">' + esc(label) + '</div>'); }
+function badgeEl(text, cls) { return $('<span class="rezka-badge' + (cls ? ' ' + cls : '') + '">' + esc(text) + '</span>'); }
 
 // ==================== ЭКРАН: ГЛАВНЫЙ ====================
 var SECTIONS = [
@@ -1059,18 +1096,15 @@ hist.slice(0, 10).forEach(function (h) {
 var el = cardEl(h, true);
 bindCard(el, h, scroll, setLast, true);
 el.on('hover:long', function () {
-Lampa.Select.show({
+rzSelect({
 title: h.title,
-items: [{ title: 'Убрать из истории' }, { title: 'Отмена' }],
+items: [{ title: 'Убрать из истории', act: 'rm' }, { title: 'Отмена', act: 'no' }],
 onSelect: function (s) {
-Lampa.Select.close();
-if (s.title === 'Убрать из истории') {
+if (s.act === 'rm') {
 histSave(histGet().filter(function (x) { return x.ts !== h.ts; }));
 build();
 }
-Lampa.Controller.toggle('content');
-},
-onBack: function () { Lampa.Controller.toggle('content'); }
+}
 });
 });
 hg.append(el);
@@ -1158,7 +1192,7 @@ this.empty = function () {};
 makeController(this, scroll, function () { return last; });
 }
 
-// ==================== ЭКРАН: КАРТОЧКА ====================
+// ==================== ЭКРАН: КАРТОЧКА (hero в стиле Lampa) ====================
 function RezkaCard(object) {
 var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
 var wrap = pageWrap(scroll);
@@ -1172,7 +1206,7 @@ var rel = object.card_url || meta.url || '';
 var m = rel.match(/\/(\d+)-/);
 return {
 rel: rel, contentId: m ? m[1] : null,
-title: meta.title || 'Загрузка…', poster: meta.poster || '',
+title: meta.title || 'Загрузка…', orig: '', tagline: '', poster: meta.poster || '',
 descr: meta.info || '', translators: [], seasons: [], info: {},
 franchiseTitle: '', franchise: [],
 isSerial: meta.type === 'serial' || rel.indexOf('/series/') >= 0,
@@ -1219,31 +1253,43 @@ getText(searchRel(card.title, 1), { method: 'GET' }, function (html) {
 if (!inited) return;
 var items = parseList(html), nt = norm(card.title), i;
 for (i = 0; i < items.length; i++) {
-if (norm(items[i].title) === nt && items[i].url === card.rel) { card.poster = items[i].poster; if (!card.descr || card.descr === (meta.info || '')) card.descr = items[i].info; break; }
+if (norm(items[i].title) === nt && items[i].url === card.rel) { card.poster = items[i].poster; break; }
 }
 if (!card.poster) for (i = 0; i < items.length; i++) if (norm(items[i].title) === nt) { card.poster = items[i].poster; break; }
 render();
 }, function () {});
 }
-var INFO_KEYS = ['Рейтинги', 'Дата выхода', 'Страна', 'Режиссер', 'Жанр', 'В качестве', 'В переводе', 'Возраст', 'Время', 'В ролях актеры'];
 function render() {
 scroll.clear();
 if (!card) { scroll.append(sectionTitle('Загрузка…')); nav(); return; }
 try { if (Lampa.Background && Lampa.Background.change) Lampa.Background.change(card.poster); } catch (e) {}
-scroll.append($('<div class="rezka-head">' +
-'<div class="rezka-head__poster">' + (card.poster ? '<img src="' + esc(card.poster) + '">' : '') + '</div>' +
-'<div class="rezka-head__info"><div class="rezka-head__title">' + esc(card.title) + '</div>' +
-'<div class="rezka-head__descr">' + esc(card.descr) + '</div></div></div>'));
-var infoHtml = '';
-INFO_KEYS.forEach(function (k) {
-if (card.info && card.info[k]) infoHtml += '<div class="rezka-info__row"><span class="rezka-info__k">' + esc(k) + '</span><span class="rezka-info__v">' + esc(card.info[k]) + '</span></div>';
-});
-infoHtml += '<div class="rezka-info__row"><span class="rezka-info__k">Старт. качество</span><span class="rezka-info__v">' + esc(stGet('quality', 'auto') === 'auto' ? 'авто (макс.)' : stGet('quality', 'auto')) + '</span></div>';
-if (infoHtml) scroll.append($('<div class="rezka-info">' + infoHtml + '</div>'));
-if (card._htmlFail) scroll.append($('<div class="rezka-note">HTML карточки не получен: ' + esc(snippet(card._htmlFail, 120)) + '</div>'));
+var info = card.info || {};
+var ratings = info['Рейтинги'] || '';
+var imdb = (ratings.match(/IMDb:\s*([\d.]+)/i) || [])[1] || '';
+var kp = (ratings.match(/Кинопоиск:\s*([\d.]+)/i) || [])[1] || '';
+var age = (info['Возраст'] || '').match(/^\d+\+/) ? info['Возраст'].match(/^\d+\+/)[0] : '';
+var qual = info['В качестве'] || '';
+var year = (info['Дата выхода'] || '').match(/(19|20)\d{2}/) ? info['Дата выхода'].match(/(19|20)\d{2}/)[0] : '';
+var hero = $('<div class="rezka-hero"></div>');
+hero.append($('<div class="rezka-hero__poster">' + (card.poster ? '<img src="' + esc(card.poster) + '">' : '') + '</div>'));
+var body = $('<div class="rezka-hero__body"></div>');
+var topline = [year, info['Страна'] || '', qual].filter(function (x) { return x; }).join(' · ');
+if (topline) body.append($('<div class="rezka-hero__topline">' + esc(topline) + '</div>'));
+body.append($('<div class="rezka-hero__title">' + esc(card.title) + '</div>'));
+var sub = card.tagline || card.orig || '';
+if (sub) body.append($('<div class="rezka-hero__tagline">' + esc(card.tagline ? '«' + card.tagline + '»' : card.orig) + '</div>'));
+var badges = $('<div class="rezka-hero__badges"></div>');
+if (imdb) badges.append(badgeEl('IMDb ' + imdb, 'imdb'));
+if (kp) badges.append(badgeEl('KP ' + kp, 'kp'));
+if (age) badges.append(badgeEl(age, 'age'));
+if (qual) badges.append(badgeEl(qual, 'q'));
+if (info['Время']) badges.append(badgeEl(info['Время'].replace(/\s*мин\..*$/, ' мин')));
+if (badges.children().length) body.append(badges);
+if (info['Жанр']) body.append($('<div class="rezka-hero__genres">' + esc(info['Жанр']) + '</div>'));
 var btns = $('<div class="rezka-btns"></div>');
 var hist = histGet().filter(function (h) { return h.url === card.rel; })[0];
 var bPlay = btnEl(card.isSerial ? (hist ? ('Продолжить S' + hist.season + ' E' + hist.episode) : 'Смотреть') : 'Смотреть');
+bPlay.addClass('rezka-btn--primary');
 bPlay.on('hover:focus', function () { setLast(bPlay); scroll.update(bPlay, true); });
 bPlay.on('hover:enter', function () {
 ensureAuth(function () {
@@ -1263,17 +1309,14 @@ if (card.translators.length) {
 var bV = btnEl('Озвучка: ' + curVoice().title);
 bV.on('hover:focus', function () { setLast(bV); scroll.update(bV, true); });
 bV.on('hover:enter', function () {
-Lampa.Select.show({
+rzSelect({
 title: 'Озвучка',
-items: card.translators.map(function (t) { return { title: t.title }; }),
+items: card.translators.map(function (t, i) { return { title: t.title, idx: i, active: i === voiceIdx }; }),
 onSelect: function (s) {
-Lampa.Select.close();
-for (var i = 0; i < card.translators.length; i++) if (card.translators[i].title === s.title) voiceIdx = i;
+voiceIdx = s.idx;
 stSet('last_voice', s.title);
-// defer: не пересекаемся с history-операциями Select (fix stack overflow)
-setTimeout(function () { loadEpisodes(function () { render(); nav(); }); }, 0);
-},
-onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); }
+loadEpisodes(function () { render(); });
+}
 });
 });
 btns.append(bV);
@@ -1282,15 +1325,13 @@ if (card.seasons.length > 1) {
 var bS = btnEl('Сезон: ' + (seasonId || card.seasons[0].id));
 bS.on('hover:focus', function () { setLast(bS); scroll.update(bS, true); });
 bS.on('hover:enter', function () {
-Lampa.Select.show({
+rzSelect({
 title: 'Сезон',
-items: card.seasons.map(function (s) { return { title: s.title, id: s.id }; }),
+items: card.seasons.map(function (s) { return { title: s.title, id: s.id, active: String(s.id) === String(seasonId) }; }),
 onSelect: function (s) {
-Lampa.Select.close();
 seasonId = s.id;
-setTimeout(function () { loadEpisodes(function () { render(); nav(); }); }, 0);
-},
-onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); }
+loadEpisodes(function () { render(); });
+}
 });
 });
 btns.append(bS);
@@ -1302,40 +1343,46 @@ var bE = btnEl('Серия: ' + (curEp ? (curEp.title || ('№' + curEp.id)) : (
 bE.on('hover:focus', function () { setLast(bE); scroll.update(bE, true); });
 bE.on('hover:enter', function () {
 if (!episodes.length) { Lampa.Noty.show('Rezka: серии не загрузились'); return; }
-Lampa.Select.show({
+rzSelect({
 title: 'Серии' + (seasonId ? ' (' + seasonId + ' сезон)' : ''),
 items: episodes.map(function (e) {
 var m2 = baseMeta(); m2.episode = e.id;
 var p = percentOf(m2);
-return { title: (e.title || ('Серия ' + e.id)) + (p ? ' — ' + Math.round(p) + '%' : ''), id: e.id };
+return { title: (e.title || ('Серия ' + e.id)) + (p ? ' — ' + Math.round(p) + '%' : ''), id: e.id, active: String(e.id) === String(lastEpId) };
 }),
 onSelect: function (s) {
-Lampa.Select.close();
 lastEpId = String(s.id);
 var ep = null;
 for (var i = 0; i < episodes.length; i++) if (String(episodes[i].id) === lastEpId) ep = episodes[i];
-if (ep) setTimeout(function () { ensureAuth(function () { playEpisode(ep); }); }, 0);
-},
-onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); }
+if (ep) ensureAuth(function () { playEpisode(ep); });
+}
 });
 });
 btns.append(bE);
 }
-scroll.append(btns);
+body.append(btns);
+hero.append(body);
+scroll.append(hero);
+if (card.descr) {
+scroll.append(sectionTitle('Подробно'));
+scroll.append($('<div class="rezka-about">' + esc(card.descr) + '</div>'));
+}
+if (card._htmlFail) scroll.append($('<div class="rezka-note">HTML карточки не получен: ' + esc(snippet(card._htmlFail, 120)) + '</div>'));
 if (card.franchise && card.franchise.length) {
 scroll.append(sectionTitle(card.franchiseTitle || 'Франшиза'));
 var fg = $('<div class="rezka-rows"></div>');
 card.franchise.forEach(function (f, i) {
 var rv = parseFloat(f.rating || '0');
 var rcls = !f.rating ? ' none' : (rv >= 7 ? ' good' : (rv < 5 ? ' bad' : ''));
-var row = $('<div class="rezka-fr selector">' +
-'<div class="rezka-fr__n">' + (i + 1) + '</div>' +
+var row = $('<div class="rezka-fr selector' + (f.self ? ' rezka-fr--self' : '') + '">' +
+'<div class="rezka-fr__n">' + (f.self ? '▶' : (i + 1)) + '</div>' +
 '<div class="rezka-fr__t">' + esc(f.title) + '</div>' +
 '<div class="rezka-fr__y">' + esc(f.year || '') + '</div>' +
 '<div class="rezka-fr__r' + rcls + '">' + esc(f.rating || '—') + '</div>' +
 '</div>');
 row.on('hover:focus', function () { setLast(row); scroll.update(row, true); });
 row.on('hover:enter', function () {
+if (f.self) return;
 Lampa.Activity.push({
 url: '', title: f.title, component: COMP_CARD,
 card_url: f.url, card_meta: { title: f.title, year: f.year, poster: '' }, page: 1
@@ -1362,6 +1409,8 @@ if (!inited) return;
 var parsed = parseCardHtml(html, card.rel, mHost);
 card.contentId = card.contentId || parsed.contentId;
 card.title = parsed.title || card.title;
+card.orig = parsed.orig || '';
+card.tagline = parsed.tagline || '';
 card.poster = parsed.poster || card.poster;
 card.descr = parsed.descr || card.descr;
 card.translators = parsed.translators;
@@ -1596,21 +1645,35 @@ Lampa.Template.add('rezka_css', '<style>' +
 '.rezka-card__meta,.rezka-card__ep{font-size:.85em;color:#8a8a8a;min-height:1.2em}' +
 '.rezka-bar{position:absolute;left:0;right:0;bottom:0;height:.35em;background:#00000088}' +
 '.rezka-bar>div{height:100%;background:#5c86c5}' +
-'.rezka-btns{display:flex;flex-wrap:wrap;align-items:flex-start;margin:.4em 0 1em}' +
-'.rezka-btn{padding:.8em 1.4em;background:#2a2a2a;border-radius:.6em;margin:0 .8em .8em 0}' +
+'.rezka-btns{display:flex;flex-wrap:wrap;align-items:flex-start;margin:.9em 0 .4em}' +
+'.rezka-btn{padding:.85em 1.6em;background:#2a2a2a;border-radius:2em;margin:0 .8em .8em 0;color:#e8e8e8}' +
+'.rezka-btn--primary{background:#5c86c5;color:#fff}' +
 '.rezka-btn.focus{background:#3d3d3d;box-shadow:0 0 0 .2em #fff}' +
-'.rezka-head{display:flex;padding:1em 0 1.4em}' +
-'.rezka-head__poster{width:14em;height:20em;border-radius:.7em;overflow:hidden;background:#1c1c1c;margin-right:2em;flex-shrink:0}' +
-'.rezka-head__poster img{width:100%;height:100%;object-fit:cover}' +
-'.rezka-head__title{font-size:1.8em;margin-bottom:.6em}' +
-'.rezka-head__descr{color:#a5a5a5;line-height:1.45;max-height:14em;overflow:hidden}' +
-'.rezka-info{margin:0 0 1.2em;background:#1f1f1f;border-radius:.7em;padding:.9em 1.2em}' +
-'.rezka-info__row{display:flex;margin-bottom:.35em;font-size:.95em;line-height:1.4}' +
-'.rezka-info__row:last-child{margin-bottom:0}' +
-'.rezka-info__k{flex:0 0 11em;color:#7d7d7d}' +
-'.rezka-info__v{flex:1;color:#cfcfcf}' +
+'.rezka-btn--primary.focus{background:#6f97d2}' +
+'.rezka-hero{display:flex;padding:1.2em 0 0}' +
+'.rezka-hero__poster{width:15em;height:21.5em;border-radius:.8em;overflow:hidden;background:#1c1c1c;margin-right:2.2em;flex-shrink:0;box-shadow:0 .6em 2em #0009}' +
+'.rezka-hero__poster img{width:100%;height:100%;object-fit:cover}' +
+'.rezka-hero__body{flex:1;min-width:0}' +
+'.rezka-hero__topline{color:#9a9a9a;font-size:1em;margin-bottom:.5em}' +
+'.rezka-hero__title{font-size:2.2em;line-height:1.15;margin-bottom:.35em;font-weight:600}' +
+'.rezka-hero__tagline{color:#b9b9b9;font-size:1.05em;margin-bottom:.7em}' +
+'.rezka-hero__badges{display:flex;flex-wrap:wrap;gap:.5em;margin-bottom:.7em}' +
+'.rezka-badge{padding:.35em .8em;border-radius:.5em;background:#2e2e2e;color:#e6e6e6;font-size:.9em}' +
+'.rezka-badge.imdb{background:#f5c518;color:#111}' +
+'.rezka-badge.kp{background:#ff6600;color:#fff}' +
+'.rezka-badge.age{background:#444}' +
+'.rezka-badge.q{background:#5c86c5}' +
+'.rezka-hero__genres{color:#9a9a9a;margin-bottom:.2em}' +
+'.rezka-about{color:#c9c9c9;line-height:1.55;max-height:16em;overflow:hidden;margin-bottom:1em}' +
+'.rezka-sel{position:fixed;left:0;top:0;right:0;bottom:0;background:#000000ee;z-index:999;padding:3em 5em;box-sizing:border-box;display:flex;flex-direction:column}' +
+'.rezka-sel>.scroll{flex:1;min-height:0}' +
+'.rezka-sel__head{font-size:1.5em;color:#fff;margin-bottom:1em}' +
+'.rezka-sel__item{padding:.95em 1.3em;background:#232323;border-radius:.7em;margin-bottom:.55em;color:#e8e8e8}' +
+'.rezka-sel__item--active{background:#31445e}' +
+'.rezka-sel__item.focus{box-shadow:0 0 0 .2em #fff;background:#303030}' +
 '.rezka-fr{display:flex;align-items:center;width:100%;padding:.7em 1.1em;background:#232323;border-radius:.6em;margin-bottom:.45em;box-sizing:border-box}' +
 '.rezka-fr.focus{box-shadow:0 0 0 .2em #fff}' +
+'.rezka-fr--self{background:#31445e}' +
 '.rezka-fr__n{flex:0 0 2.2em;color:#6f6f6f}' +
 '.rezka-fr__t{flex:1;min-width:0;color:#e8e8e8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
 '.rezka-fr__y{flex:0 0 5.5em;color:#8a8a8a;text-align:right}' +
@@ -1654,9 +1717,9 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.10.0',
+version: '4.11.0',
 name: 'HDREZKA Lab',
-description: 'Фильмы и сериалы с rezka: карусели, качества, мета, франшизы, озвучки, серии, история',
+description: 'Фильмы и сериалы с rezka: hero-карточка, свой select, качества, франшизы, история',
 component: COMP_MAIN,
 onContextMenu: function () { return { title: 'Смотреть на HDREZKA' }; },
 onContextLauch: function (card) {
