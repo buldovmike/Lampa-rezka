@@ -408,7 +408,8 @@ return info;
 function parseFranchise(html) {
 var res = { title: '', url: '', items: [] };
 var BADH = /share|social|vk\.com|viber|facebook|ok\.ru|whatsapp|wa\.me|t\.me|twitter|x\.com|telegram|mail\.ru/i;
-var BADT = /^(фильм|сериал|мультфильм|аниме|трейлер|смотреть|смотреть онлайн|все фильмы|все сериалы|все проекты)$/i;
+var BADT = /^(фильм|сериал|мультфильм|аниме|документальный|телевизионное шоу|смотреть|трейлер)\b/i;
+var KW = /все\s+(фильмы|проекты|сезоны|сериалы)|сага|вселенн|франшиз|спин-?офф|цикл/i;
 function okHref(href) {
 if (!href || href.indexOf('.html') < 0) return false;
 if (BADH.test(href)) return false;
@@ -418,12 +419,10 @@ catch (e) { return false; }
 }
 return true;
 }
-try {
-var doc = new DOMParser().parseFromString(html, 'text/html');
 function collectFrom(cont) {
-var seen = {};
-var added = 0;
+var seen = {}, added = 0;
 nodeList('a[href*=".html"]', cont).forEach(function (l) {
+if (l.querySelector && l.querySelector('img')) return; // ссылки-обложки соседних блоков = мусор
 var href = (l.getAttribute('href') || '').split('#')[0];
 if (!okHref(href)) return;
 var lt = cleanTitle(textOf(l));
@@ -435,31 +434,46 @@ var rowScope = l.closest ? (l.closest('tr') || l.closest('li') || l.parentNode) 
 var rowText = cleanTitle(textOf(rowScope || l));
 var ym = rowText.match(/(19|20)\d{2}/);
 var rt = rowText.match(/\b\d[.,]\d{1,2}\b/);
-res.items.push({
-url: key, title: lt, year: ym ? ym[0] : '',
-rating: rt ? rt[0].replace(',', '.') : '', poster: ''
-});
+res.items.push({ url: key, title: lt, year: ym ? ym[0] : '', rating: rt ? rt[0].replace(',', '.') : '', poster: '' });
 added++;
 });
 res.items = res.items.slice(0, 40);
 return added > 0;
 }
+function pickTitle(cont, fallback) {
+var cands = nodeList('h1, h2, h3, h4, [class*="section__title"], [class*="post__section"], [class*="franchise"], a[href*="/franchises/"], a[href*="/collections/"]', cont);
+var i, t;
+for (i = 0; i < cands.length; i++) {
+t = cleanTitle(textOf(cands[i])).replace(/:$/, '');
+if (t && t.length > 5 && t.length < 95 && KW.test(t)) return t;
+}
+for (i = 0; i < cands.length; i++) {
+var href = (cands[i].getAttribute && cands[i].getAttribute('href')) || '';
+t = cleanTitle(textOf(cands[i])).replace(/:$/, '');
+if (t && t.length > 5 && t.length < 95 && /\/franchises\/|\/collections\//.test(href)) return t;
+}
+return fallback;
+}
+function pickUrl(cont) {
+var fa = nodeList('a[href*="/franchises/"], a[href*="/collections/"]', cont)[0];
+return fa ? relOf(fa.getAttribute('href')) : '';
+}
+try {
+var doc = new DOMParser().parseFromString(html, 'text/html');
 var anchors = nodeList('a[href*="/franchises/"], a[href*="/collections/"]', doc);
 for (var i = 0; i < anchors.length; i++) {
-var t = cleanTitle(textOf(anchors[i])).replace(/:$/, '');
-if (!t || t.length > 90) continue;
 var cont = anchors[i].parentNode;
 for (var up = 0; up < 4 && cont; up++) {
 if (nodeList('a[href*=".html"]', cont).length >= 2) break;
 cont = cont.parentNode;
 }
 if (cont && collectFrom(cont)) {
-res.title = t;
-res.url = relOf(anchors[i].getAttribute('href'));
+res.url = pickUrl(cont) || relOf(anchors[i].getAttribute('href'));
+res.title = pickTitle(cont, cleanTitle(textOf(anchors[i])).replace(/:$/, ''));
 return res;
 }
+res.items = [];
 }
-var KW = /все\s+(фильмы|проекты|сезоны)|сага|вселенн|франшиз|спин-?офф|цикл\s+фильмов/i;
 var heads = nodeList('h2, h3, h4, [class*="section__title"], [class*="post__section"]', doc);
 for (var hI = 0; hI < heads.length; hI++) {
 var ht = cleanTitle(textOf(heads[hI])).replace(/:$/, '');
@@ -469,7 +483,12 @@ for (var up2 = 0; up2 < 3 && c2; up2++) {
 if (nodeList('a[href*=".html"]', c2).length >= 2) break;
 c2 = c2.parentNode;
 }
-if (c2 && collectFrom(c2)) { res.title = ht; return res; }
+if (c2 && collectFrom(c2)) {
+res.title = pickTitle(c2, ht);
+res.url = pickUrl(c2);
+return res;
+}
+res.items = [];
 }
 } catch (e) {}
 return res;
@@ -1575,7 +1594,7 @@ onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); 
 btns.append(bE);
 }
 scroll.append(btns);
-hRow(card.franchiseTitle || 'Франшиза', card.franchise, frCardEl, function (f) {
+hRow(card.franchiseTitle || 'Подборки', card.franchise, frCardEl, function (f) {
 Lampa.Activity.push({
 url: '', title: f.title, component: COMP_CARD,
 card_url: f.url, card_meta: { title: f.title, year: f.year, poster: f.poster }, page: 1
@@ -1874,9 +1893,9 @@ Lampa.Template.add('rezka_css', '<style>' +
 '.rezka-chip{padding:.35em .85em;background:#ffffff1f;border-radius:.5em;margin:0 .5em .5em 0;font-size:.9em;color:#e6e6e6}' +
 '.rezka-chip.rate{background:#5c86c5;color:#fff}' +
 '.rezka-chip.age{background:#c62828;color:#fff}' +
-'.rezka-actor{width:7.5em;margin:0 1.2em 1.2em 0}' +
-'.rezka-actor__ph{width:7.5em;height:7.5em;border-radius:50%;overflow:hidden;background:#2a2a2a}' +
-'.rezka-actor__ph img{width:100%;height:100%;object-fit:cover}' +
+'.rezka-actor{width:8em;margin:0 1.2em 1.2em 0}' +
+'.rezka-actor__ph{width:8em;height:8em;border-radius:50%;overflow:hidden;background:#2a2a2a;box-shadow:inset 0 0 0 .12em #ffffff26}' +
+'.rezka-actor__ph img{width:100%;height:100%;object-fit:cover;object-position:50% 22%;transform:scale(1.06)}' +
 '.rezka-actor.focus .rezka-actor__ph{box-shadow:0 0 0 .25em #fff}' +
 '.rezka-actor__n{font-size:.9em;margin-top:.5em;min-height:2.2em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}' +
 '.rezka-frcard{width:9em;margin:0 1.2em 1.2em 0;background:#232323;border-radius:.7em;padding:.7em;box-sizing:border-box}' +
@@ -1946,7 +1965,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.13.0',
+version: '4.14.0',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы с постерами, актёры, качества',
 component: COMP_MAIN,
