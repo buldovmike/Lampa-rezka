@@ -1562,8 +1562,14 @@ onBack: function () { Lampa.Select.close(); Lampa.Controller.toggle('content'); 
 btns.append(bE);
 }
 scroll.append(btns);
+(card.franchise || []).forEach(function (f) {
+if (f.current) {
+if (!f.url) f.url = card.rel;
+if (!f.poster && card.poster) f.poster = card.poster;
+}
+});
 hRow(card.franchiseTitle || 'Подборки', card.franchise, frCardEl, function (f) {
-if (!f.url) return;
+if (!f.url || f.url === card.rel) return;
 Lampa.Activity.push({
 url: '', title: f.title, component: COMP_CARD,
 card_url: f.url, card_meta: { title: f.title, year: f.year, poster: f.poster }, page: 1
