@@ -539,9 +539,16 @@ var yearM = (info['Дата выхода'] || '').match(/(19|20)\d{2}/) || rel.m
 var ageM = (info['Возраст'] || '').match(/\d+\+/);
 var imM = (info['Рейтинги'] || '').match(/IMDb:\s*([\d.]+)/i);
 var kpM = (info['Рейтинги'] || '').match(/Кинопоиск:\s*([\d.]+)/i);
+// Дефолтный translator_id из JavaScript-блоков карточки (для сериалов без видимого списка озвучек)
+var defaultTranslatorId = '';
+var cdnMatch = html.match(/initCDN\s*\(\s*{[^}]*translator_id\s*:\s*(\d+)/) ||
+               html.match(/soCdnJS\s*=\s*{[^}]*translator_id\s*:\s*(\d+)/) ||
+               html.match(/var\s+cdn\s*=\s*{[^}]*translator_id\s*:\s*(\d+)/);
+if (cdnMatch) defaultTranslatorId = cdnMatch[1];
 return {
 rel: rel, contentId: contentId, title: title, poster: poster,
 descr: card_descr || '', translators: translators, seasons: seasons,
+defaultTranslatorId: defaultTranslatorId,
 info: info,
 origTitle: textOf(doc.querySelector('.b-post__origtitle')),
 year: yearM ? yearM[0] : '',
@@ -696,7 +703,7 @@ var keys = Object.keys(eps).sort(function (a, b) { return a - b; });
 if (!keys.length) return null;
 return { seasons: keys.map(function (k) { return { id: k, title: k + ' сезон' }; }), episodes: eps };
 }
-var formE = { id: card.contentId, translator_id: voiceId || '0', action: 'get_episodes' };
+var formE = { id: card.contentId, translator_id: voiceId || card.defaultTranslatorId || '0', action: 'get_episodes' };
 getJsonAny(ajaxRel('ajax/get_cdn_series/'), formE, card.rel, card._mirror, function (d) {
 var sdoc = new DOMParser().parseFromString(d.seasons || '<i></i>', 'text/html');
 var edoc = new DOMParser().parseFromString(d.episodes || '<i></i>', 'text/html');
@@ -735,9 +742,9 @@ if (card.translators[i].id === voiceId) v = card.translators[i];
 }
 var form;
 if (card.isSerial && season && episode) {
-form = { id: card.contentId, translator_id: voiceId || '0', season: season, episode: episode, action: 'get_stream' };
+form = { id: card.contentId, translator_id: voiceId || card.defaultTranslatorId || '0', season: season, episode: episode, action: 'get_stream' };
 } else {
-form = { id: card.contentId, translator_id: voiceId || '', action: 'get_movie',
+form = { id: card.contentId, translator_id: voiceId || card.defaultTranslatorId || '0', action: 'get_movie',
 is_camrip: v ? v.camrip : '0', is_ads: v ? v.ads : '0', is_director: v ? v.director : '0' };
 }
 getJsonAny(ajaxRel('ajax/get_cdn_series/'), form, card.rel, card._mirror, function (data) {
