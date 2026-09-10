@@ -1,6 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v4.16.0 (clean rebuild: HTML-строки целы, esc() исправлен,
-defaultTranslatorId для тайтлов без списка озвучек)
+HDREZKA for Lampa/Luxo — v4.17.0
 */
 (function () {
 'use strict';
@@ -107,7 +106,9 @@ function snippet(s, n) { return String(s || '').replace(/\s+/g, ' ').slice(0, n 
 function norm(s) { return (s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ''); }
 function cleanTitle(s) { return String(s || '').replace(/\s+/g, ' ').trim(); }
 function searchRel(q, page) {
-var r = 'search/?do=search&subaction=search&q=' + encodeURIComponent(q);
+var raw = q || '';
+try { raw = decodeURIComponent(raw); } catch (e) {}
+var r = 'search/?do=search&subaction=search&q=' + encodeURIComponent(raw);
 if (page && page > 1) r += '&search_start=' + page + '&full_search=1';
 return r;
 }
@@ -211,6 +212,17 @@ return r.text().then(function (text) { return { status: r.status, text: text }; 
 })
 .then(function (res) {
 if (mode === 'direct') { try { jarMerge(host, document.cookie); } catch (e) {} }
+var dead = !res.text || res.text.length < 600 || /<title[^>]*>\s*(ВХОД|Вход|Login)/i.test(res.text);
+if (dead && !options._nologin && stGet('email') && stGet('password') && rel.indexOf('ajax/login') !== 0) {
+apiLogin(function (ok) {
+if (ok) {
+var o2 = {}; for (var k in options) o2[k] = options[k];
+o2._nologin = true;
+request(rel, o2, onDone, onFail, _retry);
+} else onDone(res);
+});
+return;
+}
 onDone(res);
 })
 .catch(function (e) {
@@ -1997,7 +2009,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.16.0',
+version: '4.17.0',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
