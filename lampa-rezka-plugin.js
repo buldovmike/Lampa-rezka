@@ -506,13 +506,20 @@ if (!contentId) { var mn = html.match(/news_id=["']?(\d{3,7})["']?/); if (mn) co
 var card_descr = textOf(doc.querySelector('.b-post__description'));
 if (!card_descr) card_descr = (doc.querySelector('meta[property="og:description"]') ? doc.querySelector('meta[property="og:description"]').getAttribute('content') : '') || textOf(doc.querySelector('[class*="descr"]'));
 var defaultTranslatorId = '';
-var cdnMatch = html.match(/initCDN\s*\(\s*\{[^}]*translator_id\s*:\s*(\d+)/) ||
-               html.match(/soCdnJS\s*=\s*\{[^}]*translator_id\s*:\s*(\d+)/) ||
-               html.match(/var\s+cdn\s*=\s*\{[^}]*translator_id\s*:\s*(\d+)/) ||
-               html.match(/data-translator_id\s*=\s*["']?(\d+)/) ||
+var cdnMatch = html.match(/soCdnJS\s*=\s*{[\s\S]*?translator_id\s*:\s*(\d+)/) ||
+               html.match(/initCDN\s*\([\s\S]*?translator_id\s*:\s*(\d+)/) ||
+               html.match(/var\s+cdn\s*=\s*{[\s\S]*?translator_id\s*:\s*(\d+)/) ||
                html.match(/<input[^>]*name\s*=\s*["']?translator_id["']?[^>]*value\s*=\s*["']?(\d+)/i) ||
-               html.match(/translator_id\s*:\s*(\d+)/);
+               html.match(/data-translator_id\s*=\s*["']?(\d+)/i) ||
+               html.match(/translator_id\s*[:=]\s*["']?(\d+)/i);
 if (cdnMatch) defaultTranslatorId = cdnMatch[1];
+// Если список озвучек пуст, но мы нашли defaultTranslatorId, добавляем его как единственную озвучку
+if (!translators.length && defaultTranslatorId) {
+    translators.push({
+        id: defaultTranslatorId, title: 'По умолчанию',
+        camrip: '0', ads: '0', director: '0'
+    });
+}
 // Фолбэк: если ничего не нашли, берём первый translator_id из HTML (для тайтлов типа «Холод»)
 if (!defaultTranslatorId) {
     var fallback = html.match(/translator_id["'\s:=]+(\d{1,8})/i);
@@ -674,8 +681,8 @@ var keys = Object.keys(eps).sort(function (a, b) { return a - b; });
 if (!keys.length) return null;
 return { seasons: keys.map(function (k) { return { id: k, title: k + ' сезон' }; }), episodes: eps };
 }
-var tid = voiceId || card.defaultTranslatorId || '';
-var formE = { id: card.contentId, translator_id: tid, action: 'get_episodes' };
+var tid = voiceId || card.defaultTranslatorId || (card.translators && card.translators.length ? card.translators[0].id : '');
+var formE = { id: card.contentId, translator_id: tid || '0', action: 'get_episodes' };
 getJsonAny(ajaxRel('ajax/get_cdn_series/'), formE, card.rel, card._mirror, function (d) {
     // Фолбэк: если rezka отвергла translator_id — парсим сезоны/серии прямо из HTML карточки
     if (d && d.success === false && /найти|озвуч|translator/i.test(d.message || '')) {
@@ -717,12 +724,12 @@ var v = null, i;
 for (i = 0; i < (card.translators || []).length; i++) {
 if (card.translators[i].id === voiceId) v = card.translators[i];
 }
-var tid = voiceId || card.defaultTranslatorId || '';
+var tid = voiceId || card.defaultTranslatorId || (card.translators && card.translators.length ? card.translators[0].id : '');
 var form;
 if (card.isSerial && season && episode) {
-form = { id: card.contentId, translator_id: tid, season: season, episode: episode, action: 'get_stream' };
+    form = { id: card.contentId, translator_id: tid || '0', season: season, episode: episode, action: 'get_stream' };
 } else {
-form = { id: card.contentId, translator_id: tid, action: 'get_movie',
+    form = { id: card.contentId, translator_id: tid || '0', action: 'get_movie',
 is_camrip: v ? v.camrip : '0', is_ads: v ? v.ads : '0', is_director: v ? v.director : '0' };
 }
 getJsonAny(ajaxRel('ajax/get_cdn_series/'), form, card.rel, card._mirror, function (data) {
