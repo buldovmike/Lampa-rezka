@@ -866,35 +866,41 @@ Lampa.Noty.show('Rezka: ' + e.message, { style: 'error' });
 });
 }
 function buildSeasonPlaylist(card, baseMeta, episodes, cb) {
-var res = new Array(episodes.length), done = 0;
-function fin() { cb(res.filter(function (r) { return r && r.url; })); }
-if (!episodes.length) { fin(); return; }
-var queue = episodes.slice();
-(function step() {
-if (!queue.length) { fin(); return; }
-var ep = queue.shift();
-var i = episodes.indexOf(ep);
-var meta = {};
-for (var k in baseMeta) meta[k] = baseMeta[k];
-meta.episode = ep.id;
-meta.hash = hashFor(meta);
-apiStream(card, baseMeta.voice_id, baseMeta.season, ep.id, function (q) {
-var keys = Object.keys(q);
-res[i] = {
-title: card.title + ' — ' + (ep.title || ('Серия ' + ep.id)),
-url: keys.length ? pickInitial(q) : '',
-quality: q,
-isonline: true,
-hash: meta.hash,
-timeline: Lampa.Timeline.view(meta.hash),
-rezka: meta
-};
-setTimeout(step, 100);
-}, function () {
-res[i] = null;
-setTimeout(step, 100);
-});
-})();
+    var res = new Array(episodes.length), done = 0, aborted = false;
+    function fin() { cb(aborted ? [] : res.filter(function (r) { return r && r.url; })); }
+    if (!episodes.length) { fin(); return; }
+    var queue = episodes.slice();
+    (function step() {
+        if (!queue.length || aborted) { fin(); return; }
+        var ep = queue.shift();
+        var i = episodes.indexOf(ep);
+        var meta = {};
+        for (var k in baseMeta) meta[k] = baseMeta[k];
+        meta.episode = ep.id;
+        meta.hash = hashFor(meta);
+        apiStream(card, baseMeta.voice_id, baseMeta.season, ep.id, function (q) {
+            var keys = Object.keys(q);
+            res[i] = {
+                title: card.title + ' — ' + (ep.title || ('Серия ' + ep.id)),
+                url: keys.length ? pickInitial(q) : '',
+                quality: q,
+                isonline: true,
+                hash: meta.hash,
+                timeline: Lampa.Timeline.view(meta.hash),
+                rezka: meta
+            };
+            setTimeout(step, 100);
+        }, function (e) {
+            var msg = (e && e.message) || '';
+            if (!aborted && /сесси|озвуч|session|translator|не удалось получить ссылку/i.test(msg)) {
+                aborted = true;
+                fin();
+                return;
+            }
+            res[i] = null;
+            setTimeout(step, 100);
+        });
+    })();
 }
 function initPlayerHooks() {
     var watchingTimer = null;
