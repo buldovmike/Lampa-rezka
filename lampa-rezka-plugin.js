@@ -1,5 +1,11 @@
 /**
-HDREZKA for Lampa/Luxo — v4.17.0
+HDREZKA for Lampa/Luxo — v4.18.0
+База = рабочая v4.16. Изменения ТОЛЬКО:
+ (1) parseCardHtml: позиционный initCDN(id, translator_id, {…}) -> defaultTranslatorId + defaultStreams;
+ (2) apiStream: тайтлы без списка озвучек отдают встроенный defaultStreams БЕЗ AJAX и БЕЗ перебора;
+ (3) apiSeasonData: tid из defaultTranslatorId, без перебора, фолбэк на HTML;
+ (4) ensureAuth: кулдаун 60с против login-спама.
+Всё остальное (фокус, чипы, франшизы, актёры, карусели, история) — без изменений.
 */
 (function () {
 'use strict';
@@ -106,9 +112,7 @@ function snippet(s, n) { return String(s || '').replace(/\s+/g, ' ').slice(0, n 
 function norm(s) { return (s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ''); }
 function cleanTitle(s) { return String(s || '').replace(/\s+/g, ' ').trim(); }
 function searchRel(q, page) {
-var raw = q || '';
-try { raw = decodeURIComponent(raw); } catch (e) {}
-var r = 'search/?do=search&subaction=search&q=' + encodeURIComponent(raw);
+var r = 'search/?do=search&subaction=search&q=' + encodeURIComponent(q);
 if (page && page > 1) r += '&search_start=' + page + '&full_search=1';
 return r;
 }
@@ -138,7 +142,6 @@ try { o = JSON.parse(stGet('person_imgs', '')); } catch (e) {}
 return o && typeof o === 'object' ? o : {};
 }
 function personImgSave(o) { stSet('person_imgs', JSON.stringify(o)); }
-
 function jarStore() {
 var o = null;
 try { o = JSON.parse(stGet('jars', '')); } catch (e) {}
@@ -212,17 +215,6 @@ return r.text().then(function (text) { return { status: r.status, text: text }; 
 })
 .then(function (res) {
 if (mode === 'direct') { try { jarMerge(host, document.cookie); } catch (e) {} }
-var dead = !res.text || res.text.length < 600 || /<title[^>]*>\s*(ВХОД|Вход|Login)/i.test(res.text);
-if (dead && !options._nologin && stGet('email') && stGet('password') && rel.indexOf('ajax/login') !== 0) {
-apiLogin(function (ok) {
-if (ok) {
-var o2 = {}; for (var k in options) o2[k] = options[k];
-o2._nologin = true;
-request(rel, o2, onDone, onFail, _retry);
-} else onDone(res);
-});
-return;
-}
 onDone(res);
 })
 .catch(function (e) {
@@ -388,88 +380,8 @@ fromRow(row);
 return out;
 }
 function htmlTitle(t) { var m = /<title[^>]*>([^<]{0,80})/i.exec(t || ''); return m ? m[1].trim() : ''; }
-function parseCardInfo(doc) {
-var info = {};
-try {
-nodeList('tr', doc).forEach(function (tr) {
-var tds = tr.querySelectorAll('td');
-if (tds.length < 2) return;
-var k = cleanTitle(textOf(tds[0])).replace(/:$/, '');
-var v = cleanTitle(textOf(tds[1]));
-if (k && v && !info[k]) info[k] = v;
-});
-} catch (e) {}
-return info;
-}
-function parseFranchise(html) {
-var res = { title: '', url: '', items: [] };
-try {
-var doc = new DOMParser().parseFromString(html, 'text/html');
-var cont = doc.querySelector('.b-post__partcontent');
-if (!cont) return res;
-var tl = doc.querySelector('a.b-post__franchise_link_title') ||
-doc.querySelector('.b-sidetitle a[href*="/franchises/"], .b-sidetitle a[href*="/collections/"]');
-if (tl) {
-res.title = cleanTitle(textOf(tl));
-res.url = relOf(tl.getAttribute('href'));
-} else {
-var st = doc.querySelector('.b-sidetitle');
-if (st) res.title = cleanTitle(textOf(st)).replace(/:$/, '');
-}
-var seen = {};
-nodeList('.b-post__partcontent_item', cont).forEach(function (item) {
-var a = item.querySelector('.td.title a') || item.querySelector('a[href*=".html"]');
-var href = a ? (a.getAttribute('href') || '') : (item.getAttribute('data-url') || '');
-var key = href ? relOf(href) : '';
-var title = cleanTitle(textOf(item.querySelector('.td.title') || item));
-var ym = cleanTitle(textOf(item.querySelector('.td.year'))).match(/(19|20)\d{2}/);
-var rating = cleanTitle(textOf(item.querySelector('.td.rating')));
-var isCur = /(^|\s)current(\s|$)/.test(item.className || '');
-if (!title) return;
-if (key) { if (seen[key]) return; seen[key] = 1; }
-res.items.push({ url: key, title: title, year: ym ? ym[0] : '', rating: rating, poster: '', current: isCur });
-});
-res.items = res.items.slice(0, 40);
-} catch (e) {}
-return res;
-}
-function personLinkFor(el) {
-var n = el;
-for (var u = 0; u < 4 && n; u++) {
-var as = nodeList('a[href*="/person/"]', n);
-if (as.length === 1) return as[0];
-if (as.length > 1) break;
-n = n.parentNode;
-}
-if (el.closest) {
-var c = el.closest('a[href*="/person/"]');
-if (c) return c;
-}
-return null;
-}
-function parseActors(doc, base) {
-var actors = [];
-try {
-nodeList('[itemprop=actor]', doc).forEach(function (el) {
-if (actors.length >= 12) return;
-var name = cleanTitle(textOf(el.querySelector('[itemprop=name]') || el));
-if (!name) return;
-var cont = el;
-for (var u = 0; u < 3 && cont; u++) {
-if (cont.querySelector && cont.querySelector('img')) break;
-cont = cont.parentNode;
-}
-var img = cont && cont.querySelector ? cont.querySelector('img') : null;
-var a = personLinkFor(el);
-actors.push({
-name: name,
-img: img ? absUrl(img.getAttribute('src') || img.getAttribute('data-src') || '', base) : '',
-purl: a ? relOf(a.getAttribute('href')) : ''
-});
-});
-} catch (e) {}
-return actors;
-}
+
+// ИЗМЕНЕНИЕ (1): корректный разбор initCDN(id, translator_id, {…}) + named-формат + streams
 function parseCardHtml(html, rel, base) {
 var doc = new DOMParser().parseFromString(html, 'text/html');
 var m = rel.match(/\/(\d+)-/);
@@ -497,7 +409,6 @@ camrip: li.getAttribute('data-camrip') === '1' ? '1' : '0',
 ads: li.getAttribute('data-ads') === '1' ? '1' : '0',
 director: li.getAttribute('data-director') === '1' ? '1' : '0'
 });
-}
 });
 if (!translators.length) {
 var re = /data-translator_id=["']?(\d+)["']?[^>]*>\s*([^<]{1,60})</g, mm;
@@ -517,44 +428,105 @@ var contentId = pid ? pid.getAttribute('value') : (m ? m[1] : null);
 if (!contentId) { var mn = html.match(/news_id=["']?(\d{3,7})["']?/); if (mn) contentId = mn[1]; }
 var card_descr = textOf(doc.querySelector('.b-post__description'));
 if (!card_descr) card_descr = (doc.querySelector('meta[property="og:description"]') ? doc.querySelector('meta[property="og:description"]').getAttribute('content') : '') || textOf(doc.querySelector('[class*="descr"]'));
+// --- initCDN: позиционно (id, translator_id, {…}) ИЛИ именованно {"translator_id":N,…} ---
 var defaultTranslatorId = '', defaultStreams = '';
-var mInit = html.match(/initCDN\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\{[\s\S]{0,6000}?\})\s*\)/) ||
-            html.match(/initCDN\s*\(\s*(\{[\s\S]{0,6000}?\})\s*\)/);
+var mInit = html.match(/initCDN\s*\(([\s\S]{0,4000}?)\)\s*;/);
 if (mInit) {
-    var jsonPart = mInit[3] || mInit[1] || '';
-    var mt = jsonPart.match(/"translator_id"\s*:\s*(\d+)/);
-    var ms2 = jsonPart.match(/"streams"\s*:\s*"([^"]+)"/);
-    if (mt) defaultTranslatorId = mt[1];
-    if (ms2) defaultStreams = ms2[1];
+var args = mInit[1];
+var mnamed = args.match(/["']?translator_id["']?\s*:\s*(\d+)/);
+if (mnamed) defaultTranslatorId = mnamed[1];
+else {
+var mpos = args.match(/^\s*(\d+)\s*,\s*(\d+)/);
+if (mpos) defaultTranslatorId = mpos[2];
+}
+var mstr = args.match(/["']?streams["']?\s*:\s*["']([^"']+)["']/);
+if (mstr) defaultStreams = mstr[1];
 }
 if (!defaultTranslatorId) {
-    var mAny = html.match(/soCdnJS\s*=\s*\{[\s\S]{0,6000}?"translator_id"\s*:\s*(\d+)/) ||
-               html.match(/"translator_id"\s*:\s*(\d+)/);
-    if (mAny) defaultTranslatorId = mAny[1];
+var many = html.match(/["']?translator_id["']?\s*:\s*(\d+)/);
+if (many) defaultTranslatorId = many[1];
 }
 if (!defaultStreams) {
-    var mS = html.match(/"streams"\s*:\s*"([^"]+)"/);
-    if (mS) defaultStreams = mS[1];
+var mstr2 = html.match(/["']?streams["']?\s*:\s*["']([^"']+)["']/);
+if (mstr2) defaultStreams = mstr2[1];
 }
-var fr = parseFranchise(html);
+var info = {};
+try {
+nodeList('tr', doc).forEach(function (tr) {
+var tds = tr.querySelectorAll('td');
+if (tds.length < 2) return;
+var k = cleanTitle(textOf(tds[0])).replace(/:$/, '');
+var v = cleanTitle(textOf(tds[1]));
+if (k && v && !info[k]) info[k] = v;
+});
+} catch (e) {}
+var fr = { title: '', url: '', items: [] };
+try {
+var ftitle = doc.querySelector('a.b-post__franchise_link_title');
+var fcont = doc.querySelector('.b-post__partcontent');
+if (ftitle && fcont) {
+fr.title = cleanTitle(textOf(ftitle));
+fr.url = relOf(ftitle.getAttribute('href') || '');
+nodeList('.b-post__partcontent_item', fcont).forEach(function (it) {
+var a = it.querySelector('.td.title a');
+var isCur = /(^|\s)current(\s|$)/.test(it.className || '');
+var href = a ? (a.getAttribute('href') || '') : (it.getAttribute('data-url') || '');
+var t2 = cleanTitle(textOf(it.querySelector('.td.title') || it));
+var yr = cleanTitle(textOf(it.querySelector('.td.year'))).match(/(19|20)\d{2}/);
+var rt = cleanTitle(textOf(it.querySelector('.td.rating')));
+if (!t2) return;
+fr.items.push({ url: relOf(href), title: t2, year: yr ? yr[0] : '', rating: rt, poster: '', current: isCur });
+});
+}
+} catch (e) {}
 return {
 rel: rel, contentId: contentId, title: title, poster: poster,
 descr: card_descr || '', translators: translators, seasons: seasons,
-info: parseCardInfo(doc),
+info: info,
 origTitle: textOf(doc.querySelector('.b-post__origtitle')),
-year: (parseCardInfo(doc)['Дата выхода'] || '').match(/(19|20)\d{2}/) ? (parseCardInfo(doc)['Дата выхода'].match(/(19|20)\d{2}/) || [])[0] : (rel.match(/-(19|20)\d{2}-/) || [])[0] || '',
-country: parseCardInfo(doc)['Страна'] || '',
-quality: parseCardInfo(doc)['В качестве'] || '',
-age: (parseCardInfo(doc)['Возраст'] || '').match(/\d+\+/) ? (parseCardInfo(doc)['Возраст'].match(/\d+\+/) || [])[0] : '',
-duration: parseCardInfo(doc)['Время'] || '',
-imdb: (parseCardInfo(doc)['Рейтинги'] || '').match(/IMDb:\s*([\d.]+)/i) ? (parseCardInfo(doc)['Рейтинги'].match(/IMDb:\s*([\d.]+)/i) || [])[1] : '',
-kp: (parseCardInfo(doc)['Рейтинги'] || '').match(/Кинопоиск:\s*([\d.]+)/i) ? (parseCardInfo(doc)['Рейтинги'].match(/Кинопоиск:\s*([\d.]+)/i) || [])[1] : '',
-genres: (parseCardInfo(doc)['Жанр'] || '').split(',').map(cleanTitle).filter(Boolean),
-actors: parseActors(doc, base),
-similar: [],
+year: (info['Дата выхода'] || '').match(/(19|20)\d{2}/) ? (info['Дата выхода'].match(/(19|20)\d{2}/) || [])[0] : (rel.match(/-(19|20)\d{2}-/) || [])[0] || '',
+country: info['Страна'] || '',
+quality: info['В качестве'] || '',
+age: (info['Возраст'] || '').match(/\d+\+/) ? (info['Возраст'].match(/\d+\+/) || [])[0] : '',
+duration: info['Время'] || '',
+imdb: (info['Рейтинги'] || '').match(/IMDb:\s*([\d.]+)/i) ? (info['Рейтинги'].match(/IMDb:\s*([\d.]+)/i) || [])[1] : '',
+kp: (info['Рейтинги'] || '').match(/Кинопоиск:\s*([\d.]+)/i) ? (info['Рейтинги'].match(/Кинопоиск:\s*([\d.]+)/i) || [])[1] : '',
+genres: (info['Жанр'] || '').split(',').map(cleanTitle).filter(Boolean),
+actors: (function () {
+var arr = [];
+try {
+nodeList('[itemprop=actor]', doc).forEach(function (el) {
+if (arr.length >= 12) return;
+var nm = cleanTitle(textOf(el.querySelector('[itemprop=name]') || el));
+if (!nm) return;
+var c = el;
+for (var u = 0; u < 3 && c; u++) { if (c.querySelector && c.querySelector('img')) break; c = c.parentNode; }
+var im = c && c.querySelector ? c.querySelector('img') : null;
+var a = el.closest ? el.closest('a[href*="/person/"]') : null;
+arr.push({ name: nm, img: im ? absUrl(im.getAttribute('src') || im.getAttribute('data-src') || '', base) : '', purl: a ? relOf(a.getAttribute('href')) : '' });
+});
+} catch (e) {}
+return arr;
+})(),
+similar: (function () {
+try {
+var heads = nodeList('h2, h3, h4, [class*="section__title"]', doc);
+for (var i = 0; i < heads.length; i++) {
+var ht = cleanTitle(textOf(heads[i]));
+if (!/похожи|similar|смотрите также/i.test(ht)) continue;
+var cont = heads[i].parentNode;
+for (var up = 0; up < 2 && cont; up++) {
+if (cont.innerHTML && cont.innerHTML.indexOf('b-content__inline_item') >= 0) break;
+cont = cont.parentNode;
+}
+if (cont) return parseList(cont.innerHTML).slice(0, 14);
+}
+} catch (e) {}
+return [];
+})(),
 franchiseTitle: fr.title, franchise: fr.items, franchiseUrl: fr.url,
 isSerial: rel.indexOf('/series/') >= 0,
-user_hash: '', defaultTranslatorId: defaultTranslatorId
+user_hash: '', defaultTranslatorId: defaultTranslatorId, defaultStreams: defaultStreams
 };
 }
 function scrapeEpisodesFromHtml(html) {
@@ -572,10 +544,11 @@ return eps;
 function parseQualityList(raw) {
 var map = {};
 if (!raw) return map;
+raw = String(raw).replace(/\\\//g, '/');
 var re = /\[(\d+p[^\]]*)\]\s*(https?:\/\/[^\s\]]+)/g, m;
-while ((m = re.exec(String(raw))) !== null) map[m[1]] = m[2];
+while ((m = re.exec(raw)) !== null) map[m[1]] = m[2];
 if (!Object.keys(map).length) {
-var single = String(raw).match(/https?:\/\/[^\s"']+/);
+var single = raw.match(/https?:\/\/[^\s"']+/);
 if (single) map[/\.m3u8/.test(single[0]) ? 'AUTO' : '1080p'] = single[0];
 }
 return map;
@@ -596,6 +569,7 @@ return '';
 function decodeRezkaUrl(encoded) {
 var urls = [];
 if (!encoded) return urls;
+encoded = String(encoded).replace(/\\\//g, '/');
 if (/^https?:/.test(encoded)) {
 var q0 = /(\d{3,4})p/.exec(encoded);
 return [{ url: encoded, quality: /\.m3u8/.test(encoded) ? 'AUTO' : (q0 ? q0[1] + 'p' : '1080p') }];
@@ -621,6 +595,7 @@ return urls;
 }
 function buildQuality(url) {
 var map = {};
+url = String(url || '').replace(/\\\//g, '/');
 if (/^https?:/.test(url)) {
 if (/\.m3u8(?=$|\?)/.test(url)) return { 'AUTO': url };
 if (/\.mp4(?=$|\?|:)/.test(url)) { map['AUTO'] = url + ':hls:manifest.m3u8'; map['MP4'] = url; return map; }
@@ -659,22 +634,6 @@ hash: meta.hash, percent: meta.percent, ts: meta.ts
 };
 }
 
-function extractTidCandidates(card) {
-var cands = [];
-function add(id) { id = String(id == null ? '' : id).trim(); if (cands.indexOf(id) < 0) cands.push(id); }
-add(card._curVoiceId);
-add(card.defaultTranslatorId);
-var h = card._html || '';
-var re = /data-translator_id\s*=\s*["']?(\d+)/g, m;
-while ((m = re.exec(h)) !== null) add(m[1]);
-re = /["']?translator_id["']?\s*[:=]\s*["']?(\d+)/g;
-while ((m = re.exec(h)) !== null) add(m[1]);
-add('0');
-add('');
-for (var i = 1; i <= 12; i++) add(String(i));
-return cands;
-}
-            
 function apiLogin(cb) {
 var email = stGet('email', ''), pass = stGet('password', '');
 if (!email || !pass) { cb(false, 'укажите email и пароль'); return; }
@@ -694,11 +653,16 @@ next();
 }
 next();
 }
+// ИЗМЕНЕНИЕ (4): кулдаун 60с против login-спама
 function ensureAuth(cb) {
 if (jarHasAuth()) { cb(true); return; }
-if (stGet('email') && stGet('password')) apiLogin(function (ok) { cb(ok); });
-else cb(true);
+var lastTs = parseInt(stGet('last_login_ts', '0') || '0', 10);
+if (stGet('email') && stGet('password') && Date.now() - lastTs > 60000) {
+stSet('last_login_ts', String(Date.now()));
+apiLogin(function (ok) { cb(ok); });
+} else cb(true);
 }
+// ИЗМЕНЕНИЕ (3): tid из defaultTranslatorId, БЕЗ перебора, фолбэк на HTML
 function apiSeasonData(card, voiceId, cb, fail) {
 card._sd = card._sd || {};
 if (card._sd[voiceId]) { cb(card._sd[voiceId]); return; }
@@ -708,20 +672,9 @@ var keys = Object.keys(eps).sort(function (a, b) { return a - b; });
 if (!keys.length) return null;
 return { seasons: keys.map(function (k) { return { id: k, title: k + ' сезон' }; }), episodes: eps };
 }
-var cands = extractTidCandidates(card);
-var i = 0;
-function tryNext() {
-if (i >= cands.length) {
-var sd0 = fromHtml();
-if (sd0) { card._sd[voiceId] = sd0; cb(sd0); return; }
-fail(new Error('не удалось подобрать озвучку get_episodes'));
-return;
-}
-var tid = cands[i++];
-var formE = { id: card.contentId, action: 'get_episodes' };
-if (tid !== '') formE.translator_id = tid;
+var tid = voiceId || card.defaultTranslatorId || '';
+var formE = { id: card.contentId, translator_id: tid, action: 'get_episodes' };
 getJsonAny(ajaxRel('ajax/get_cdn_series/'), formE, card.rel, card._mirror, function (d) {
-if (!d || d.success === false) { tryNext(); return; }
 var sdoc = new DOMParser().parseFromString(d.seasons || '<i></i>', 'text/html');
 var edoc = new DOMParser().parseFromString(d.episodes || '<i></i>', 'text/html');
 var seasons = nodeList('li[data-tab_id], li[data-season]', sdoc).map(function (li) {
@@ -738,55 +691,61 @@ Object.keys(eps).sort(function (a, b) { return a - b; }).forEach(function (k) {
 seasons.push({ id: k, title: k + ' сезон' });
 });
 }
-if (!seasons.length && !Object.keys(eps).length) { tryNext(); return; }
-card._tid = tid;
+if (!seasons.length && !Object.keys(eps).length) {
+var sd0 = fromHtml();
+if (sd0) { card._sd[voiceId] = sd0; cb(sd0); return; }
+fail(new Error('нет данных сезонов'));
+return;
+}
 var sd = { seasons: seasons, episodes: eps };
 card._sd[voiceId] = sd;
 cb(sd);
-}, function () { tryNext(); });
+}, function (e) {
+log('get_episodes failed:', e && e.message);
+var sd0 = fromHtml();
+if (sd0) { card._sd[voiceId] = sd0; cb(sd0); return; }
+fail(e);
+});
 }
-tryNext();
-}
+// ИЗМЕНЕНИЕ (2): тайтлы без списка озвучек отдают встроенный defaultStreams БЕЗ AJAX; перебора НЕТ
 function apiStream(card, voiceId, season, episode, cb, fail) {
 var v = null, i;
 for (i = 0; i < (card.translators || []).length; i++) {
 if (card.translators[i].id === voiceId) v = card.translators[i];
 }
-function doStream(tid2, onBad) {
-var form = { id: card.contentId, action: 'get_stream', favs: '0' };
-if (tid2 !== '') form.translator_id = tid2;
-if (card.isSerial && season && episode) { form.season = season; form.episode = episode; }
-if (v) { form.is_camrip = v.camrip; form.is_ads = v.ads; form.is_director = v.director; }
+var tid = voiceId || card.defaultTranslatorId || '';
+if (!card.translators.length && card.defaultStreams && !season) {
+var qd = buildQuality(card.defaultStreams);
+if (Object.keys(qd).length) { cb(qd); return; }
+}
+var form;
+if (card.isSerial && season && episode) {
+form = { id: card.contentId, translator_id: tid, season: season, episode: episode, action: 'get_stream' };
+} else {
+form = { id: card.contentId, translator_id: tid, action: 'get_movie',
+is_camrip: v ? v.camrip : '0', is_ads: v ? v.ads : '0', is_director: v ? v.director : '0' };
+}
 getJsonAny(ajaxRel('ajax/get_cdn_series/'), form, card.rel, card._mirror, function (data) {
-if (!data || !data.success) { onBad(data); return; }
+if (!data || !data.success) {
+var q0 = streamFromHtml(card);
+if (q0 && Object.keys(q0).length) { cb(q0); return; }
+var msg = (data && data.message) || 'сервер не вернул ссылку';
+Lampa.Noty.show('Rezka: ' + msg, { style: 'error' });
+fail(new Error(msg));
+return;
+}
 var map = parseQualityList(data.url || data.streams);
-if (!Object.keys(map).length) { onBad(data); return; }
-card._tid = tid2;
+if (!Object.keys(map).length) {
+var q1 = streamFromHtml(card);
+if (q1 && Object.keys(q1).length) { cb(q1); return; }
+fail(new Error('сервер не вернул ссылку'));
+return;
+}
 cb(map);
-}, function () { onBad(null); });
-}
-var tid = voiceId || card._tid || card.defaultTranslatorId || '';
-doStream(tid, function (data) {
-var msg = (data && data.message) || '';
-if (data && /озвуч|сесси|found|expired/i.test(msg) === false) {
+}, function (e) {
 var q0 = streamFromHtml(card);
 if (q0 && Object.keys(q0).length) { cb(q0); return; }
-fail(new Error(msg || 'сервер не вернул ссылку'));
-return;
-}
-var cands = extractTidCandidates(card);
-var j = 0;
-(function step() {
-if (j >= cands.length) {
-var q0 = streamFromHtml(card);
-if (q0 && Object.keys(q0).length) { cb(q0); return; }
-fail(new Error(msg || 'сервер не вернул ссылку'));
-return;
-}
-var t2 = cands[j++];
-if (t2 === tid) { step(); return; }
-doStream(t2, function () { step(); });
-})();
+fail(e);
 });
 }
 
@@ -884,94 +843,60 @@ Lampa.Noty.show('Rezka: ' + e.message, { style: 'error' });
 });
 }
 function buildSeasonPlaylist(card, baseMeta, episodes, cb) {
-    var res = new Array(episodes.length), done = 0, aborted = false;
-    function fin() { cb(aborted ? [] : res.filter(function (r) { return r && r.url; })); }
-    if (!episodes.length) { fin(); return; }
-    var queue = episodes.slice();
-    (function step() {
-        if (!queue.length || aborted) { fin(); return; }
-        var ep = queue.shift();
-        var i = episodes.indexOf(ep);
-        var meta = {};
-        for (var k in baseMeta) meta[k] = baseMeta[k];
-        meta.episode = ep.id;
-        meta.hash = hashFor(meta);
-        apiStream(card, baseMeta.voice_id, baseMeta.season, ep.id, function (q) {
-            var keys = Object.keys(q);
-            res[i] = {
-                title: card.title + ' — ' + (ep.title || ('Серия ' + ep.id)),
-                url: keys.length ? pickInitial(q) : '',
-                quality: q,
-                isonline: true,
-                hash: meta.hash,
-                timeline: Lampa.Timeline.view(meta.hash),
-                rezka: meta
-            };
-            setTimeout(step, 100);
-        }, function (e) {
-            var msg = (e && e.message) || '';
-            if (!aborted && /сесси|озвуч|session|translator|не удалось получить ссылку/i.test(msg)) {
-                aborted = true;
-                fin();
-                return;
-            }
-            res[i] = null;
-            setTimeout(step, 100);
-        });
-    })();
+var res = new Array(episodes.length), done = 0;
+function fin() { cb(res.filter(function (r) { return r && r.url; })); }
+if (!episodes.length) { fin(); return; }
+var queue = episodes.slice();
+(function step() {
+if (!queue.length) { fin(); return; }
+var ep = queue.shift();
+var i = episodes.indexOf(ep);
+var meta = {};
+for (var k in baseMeta) meta[k] = baseMeta[k];
+meta.episode = ep.id;
+meta.hash = hashFor(meta);
+apiStream(card, baseMeta.voice_id, baseMeta.season, ep.id, function (q) {
+var keys = Object.keys(q);
+res[i] = {
+title: card.title + ' — ' + (ep.title || ('Серия ' + ep.id)),
+url: keys.length ? pickInitial(q) : '',
+quality: q,
+isonline: true,
+hash: meta.hash,
+timeline: Lampa.Timeline.view(meta.hash),
+rezka: meta
+};
+setTimeout(step, 100);
+}, function () {
+res[i] = null;
+setTimeout(step, 100);
+});
+})();
 }
 function initPlayerHooks() {
-    var watchingTimer = null;
-    
-    Lampa.Player.listener.follow('start', function (data) {
-        if (!data || !data.rezka) return;
-        var cur = data.rezka;
-        histPush(cur);
-        
-        // send_save: отмечает контент как "начатый" в списке "Досмотреть" на rezka
-        if (cur._card && cur._card.contentId) {
-            var saveForm = { id: cur._card.contentId };
-            if (cur.season) saveForm.season = cur.season;
-            if (cur.episode) saveForm.episode = cur.episode;
-            if (cur.voice_id) saveForm.translator_id = cur.voice_id;
-            getJsonAny(ajaxRel('ajax/send_save/'), saveForm, cur._card.rel, cur._card._mirror, function () {}, function () {});
-        }
-        
-        // send_watching: синхронизирует прогресс просмотра с rezka
-        function sendWatching() {
-            if (!cur._card || !cur._card.contentId) return;
-            var p = 0;
-            try { p = Lampa.Timeline.view(hashFor(cur)).percent || 0; } catch (e) {}
-            cur.percent = p;
-            histPush(cur);
-            var watchForm = {
-                id: cur._card.contentId,
-                season: cur.season || '',
-                episode: cur.episode || '',
-                translator_id: cur.voice_id || '',
-                percent: Math.round(p)
-            };
-            getJsonAny(ajaxRel('ajax/send_watching/'), watchForm, cur._card.rel, cur._card._mirror, function () {}, function () {});
-        }
-        
-        // Периодическая синхронизация каждые 30 секунд во время просмотра
-        if (watchingTimer) { clearInterval(watchingTimer); watchingTimer = null; }
-        watchingTimer = setInterval(sendWatching, 30000);
-        
-        function finalize() {
-            if (watchingTimer) { clearInterval(watchingTimer); watchingTimer = null; }
-            sendWatching();
-        }
-        
-        function onEnd() { finalize(); }
-        function onDestroy() {
-            finalize();
-            try { Lampa.PlayerVideo.listener.remove('ended', onEnd); } catch (e) {}
-            try { Lampa.Player.listener.remove('destroy', onDestroy); } catch (e) {}
-        }
-        Lampa.PlayerVideo.listener.follow('ended', onEnd);
-        Lampa.Player.listener.follow('destroy', onDestroy);
-    });
+Lampa.Player.listener.follow('start', function (data) {
+if (!data || !data.rezka) return;
+var cur = data.rezka;
+histPush(cur);
+function finalize() {
+cur.percent = percentOf(cur);
+histPush(cur);
+if (stGet('sync', '') === 'true' && cur._card) {
+getJsonAny(ajaxRel('ajax/send_watching/'), {
+id: cur._card.contentId, season: cur.season || '', episode: cur.episode || '',
+translator_id: cur.voice_id || '', percent: Math.round(cur.percent || 0)
+}, cur._card.rel, cur._card._mirror, function () {}, function () {});
+}
+}
+function onEnd() { finalize(); }
+function onDestroy() {
+finalize();
+try { Lampa.PlayerVideo.listener.remove('ended', onEnd); } catch (e) {}
+try { Lampa.Player.listener.remove('destroy', onDestroy); } catch (e) {}
+}
+Lampa.PlayerVideo.listener.follow('ended', onEnd);
+Lampa.Player.listener.follow('destroy', onDestroy);
+});
 }
 
 function pageWrap(scroll) {
@@ -1347,7 +1272,7 @@ origTitle: '', year: meta.year || '', country: '', quality: '', age: '', duratio
 imdb: '', kp: '', genres: [], actors: [], similar: [],
 franchiseTitle: '', franchise: [], franchiseUrl: '',
 isSerial: meta.type === 'serial' || rel.indexOf('/series/') >= 0,
-_html: '', _mirror: '', user_hash: '', defaultTranslatorId: ''
+_html: '', _mirror: '', user_hash: '', defaultTranslatorId: '', defaultStreams: ''
 };
 }
 function pickVoice() {
@@ -1693,6 +1618,7 @@ card.franchiseTitle = parsed.franchiseTitle || '';
 card.franchise = parsed.franchise || [];
 card.franchiseUrl = parsed.franchiseUrl || '';
 card.defaultTranslatorId = parsed.defaultTranslatorId || '';
+card.defaultStreams = parsed.defaultStreams || '';
 card._html = html;
 card._mirror = mHost;
 afterCard();
@@ -2015,7 +1941,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.17.0',
+version: '4.18.0',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
