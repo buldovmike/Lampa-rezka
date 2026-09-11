@@ -518,14 +518,9 @@ if (!contentId) { var mn = html.match(/news_id=["']?(\d{3,7})["']?/); if (mn) co
 var card_descr = textOf(doc.querySelector('.b-post__description'));
 if (!card_descr) card_descr = (doc.querySelector('meta[property="og:description"]') ? doc.querySelector('meta[property="og:description"]').getAttribute('content') : '') || textOf(doc.querySelector('[class*="descr"]'));
 var defaultTranslatorId = '', defaultStreams = '';
-var mInit = html.match(/initCDN\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\{[\s\S]{0,6000}?\})\s*\)/) ||
-            html.match(/initCDN\s*\(\s*(\{[\s\S]{0,6000}?\})\s*\)/);
+var mInit = html.match(/sof\.tv\.initCDNSeriesEvents\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*([01])\s*,\s*([01])(?:\s*,\s*([01]))?/);
 if (mInit) {
-    var jsonPart = mInit[3] || mInit[1] || '';
-    var mt = jsonPart.match(/"translator_id"\s*:\s*(\d+)/);
-    var ms2 = jsonPart.match(/"streams"\s*:\s*"([^"]+)"/);
-    if (mt) defaultTranslatorId = mt[1];
-    if (ms2) defaultStreams = ms2[1];
+    defaultTranslatorId = mInit[2];
 }
 if (!defaultTranslatorId) {
     var mAny = html.match(/soCdnJS\s*=\s*\{[\s\S]{0,6000}?"translator_id"\s*:\s*(\d+)/) ||
@@ -554,7 +549,8 @@ actors: parseActors(doc, base),
 similar: [],
 franchiseTitle: fr.title, franchise: fr.items, franchiseUrl: fr.url,
 isSerial: rel.indexOf('/series/') >= 0,
-user_hash: '', defaultTranslatorId: defaultTranslatorId
+user_hash: '', defaultTranslatorId: defaultTranslatorId,
+defaultStreams: defaultStreams
 };
 }
 function scrapeEpisodesFromHtml(html) {
@@ -754,7 +750,7 @@ getJsonAny(ajaxRel('ajax/get_cdn_series/'), form, card.rel, card._mirror, functi
         var q0 = streamFromHtml(card);
         if (q0 && Object.keys(q0).length) { cb(q0); return; }
         // Если translator_id отвергнут — пробуем с '0' (резервный вариант)
-        if (data && /найти|озвуч|translator/i.test(data.message || '') && form.translator_id !== '0') {
+        /*if (data && /найти|озвуч|translator/i.test(data.message || '') && form.translator_id !== '0') {
             form.translator_id = '0';
             getJsonAny(ajaxRel('ajax/get_cdn_series/'), form, card.rel, card._mirror, function (d2) {
                 if (d2 && d2.success) {
@@ -767,7 +763,7 @@ getJsonAny(ajaxRel('ajax/get_cdn_series/'), form, card.rel, card._mirror, functi
                 fail(new Error((data && data.message) || 'нет ссылки'));
             }, fail);
             return;
-        }
+        } */
         var msg = (data && data.message) || 'сервер не вернул ссылку';
         Lampa.Noty.show('Rezka: ' + msg, { style: 'error' });
         fail(new Error(msg));
@@ -1691,6 +1687,7 @@ card.franchiseTitle = parsed.franchiseTitle || '';
 card.franchise = parsed.franchise || [];
 card.franchiseUrl = parsed.franchiseUrl || '';
 card.defaultTranslatorId = parsed.defaultTranslatorId || '';
+card.defaultStreams = parsed.defaultStreams || '';
 card._html = html;
 card._mirror = mHost;
 afterCard();
