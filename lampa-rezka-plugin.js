@@ -659,6 +659,22 @@ hash: meta.hash, percent: meta.percent, ts: meta.ts
 };
 }
 
+function extractTidCandidates(card) {
+var cands = [];
+function add(id) { id = String(id == null ? '' : id).trim(); if (cands.indexOf(id) < 0) cands.push(id); }
+add(card._curVoiceId);
+add(card.defaultTranslatorId);
+var h = card._html || '';
+var re = /data-translator_id\s*=\s*["']?(\d+)/g, m;
+while ((m = re.exec(h)) !== null) add(m[1]);
+re = /["']?translator_id["']?\s*[:=]\s*["']?(\d+)/g;
+while ((m = re.exec(h)) !== null) add(m[1]);
+add('0');
+add('');
+for (var i = 1; i <= 12; i++) add(String(i));
+return cands;
+}
+            
 function apiLogin(cb) {
 var email = stGet('email', ''), pass = stGet('password', '');
 if (!email || !pass) { cb(false, 'укажите email и пароль'); return; }
@@ -692,99 +708,85 @@ var keys = Object.keys(eps).sort(function (a, b) { return a - b; });
 if (!keys.length) return null;
 return { seasons: keys.map(function (k) { return { id: k, title: k + ' сезон' }; }), episodes: eps };
 }
-var tid = voiceId || card.defaultTranslatorId || '';
-if (!tid) { var sd0 = fromHtml(); if (sd0) { card._sd[voiceId] = sd0; cb(sd0); return; } }
-var formE = { id: card.contentId, translator_id: tid, action: 'get_episodes' };
+var cands = extractTidCandidates(card);
+var i = 0;
+function tryNext() {
+if (i >= cands.length) {
+var sd0 = fromHtml();
+if (sd0) { card._sd[voiceId] = sd0; cb(sd0); return; }
+fail(new Error('не удалось подобрать озвучку get_episodes'));
+return;
+}
+var tid = cands[i++];
+var formE = { id: card.contentId, action: 'get_episodes' };
+if (tid !== '') formE.translator_id = tid;
 getJsonAny(ajaxRel('ajax/get_cdn_series/'), formE, card.rel, card._mirror, function (d) {
-    // Фолбэк: если rezka отвергла translator_id — парсим сезоны/серии прямо из HTML карточки
-    if (d && d.success === false && /найти|озвуч|translator/i.test(d.message || '')) {
-        var sd0 = fromHtml();
-        if (sd0) { card._sd[voiceId] = sd0; cb(sd0); return; }
-    }
-    var sdoc = new DOMParser().parseFromString(d.seasons || '<i></i>', 'text/html');
-    var edoc = new DOMParser().parseFromString(d.episodes || '<i></i>', 'text/html');
-    var seasons = nodeList('li[data-tab_id], li[data-season]', sdoc).map(function (li) {
-        return { id: li.getAttribute('data-tab_id') || li.getAttribute('data-season'),  title: textOf(li) };
-    });
-    var eps = {};
-    nodeList('li[data-episode_id]', edoc).forEach(function (li) {
-        var sid = li.getAttribute('data-season_id') || '1';
-        if (!eps[sid]) eps[sid] =  [];
-        eps[sid].push({ id: li.getAttribute('data-episode_id'), title: textOf(li) });
-    });
-    if (!seasons.length) {
-        Object.keys(eps).sort(function (a, b) { return a - b; }).forEach(function (k) {
-            seasons.push({ id: k, title: k + ' сезон' });
-        });
-    }
-    if (!seasons.length) {
-        var sd0 = fromHtml();
-        if (sd0) { card._sd[voiceId] = sd0; cb(sd0); return; }
-    }
-    var sd = { seasons: seasons, episodes: eps };
-    card._sd[voiceId] = sd;
-    cb(sd);
-}, function (e) {
-    log('get_episodes failed:', e && e.message);
-    var sd0 = fromHtml();
-    if (sd0) { card._sd[voiceId] = sd0; cb(sd0); return; }
-    fail(e);
+if (!d || d.success === false) { tryNext(); return; }
+var sdoc = new DOMParser().parseFromString(d.seasons || '<i></i>', 'text/html');
+var edoc = new DOMParser().parseFromString(d.episodes || '<i></i>', 'text/html');
+var seasons = nodeList('li[data-tab_id], li[data-season]', sdoc).map(function (li) {
+return { id: li.getAttribute('data-tab_id') || li.getAttribute('data-season'), title: textOf(li) };
 });
+var eps = {};
+nodeList('li[data-episode_id]', edoc).forEach(function (li) {
+var sid = li.getAttribute('data-season_id') || '1';
+if (!eps[sid]) eps[sid] = [];
+eps[sid].push({ id: li.getAttribute('data-episode_id'), title: textOf(li) });
+});
+if (!seasons.length) {
+Object.keys(eps).sort(function (a, b) { return a - b; }).forEach(function (k) {
+seasons.push({ id: k, title: k + ' сезон' });
+});
+}
+if (!seasons.length && !Object.keys(eps).length) { tryNext(); return; }
+card._tid = tid;
+var sd = { seasons: seasons, episodes: eps };
+card._sd[voiceId] = sd;
+cb(sd);
+}, function () { tryNext(); });
+}
+tryNext();
 }
 function apiStream(card, voiceId, season, episode, cb, fail) {
 var v = null, i;
 for (i = 0; i < (card.translators || []).length; i++) {
 if (card.translators[i].id === voiceId) v = card.translators[i];
 }
-var tid = voiceId || card.defaultTranslatorId || (card.translators && card.translators.length ? card.translators[0].id : '');
-if (!tid && card.defaultStreams) {
-    var qd = buildQuality(card.defaultStreams);
-    if (Object.keys(qd).length) { cb(qd); return; }
-}
-var form;
-if (card.isSerial && season && episode) {
-    form = { id: card.contentId, translator_id: tid || '0', season: season, episode: episode, action: 'get_stream' };
-} else {
-    form = { id: card.contentId, translator_id: tid || '0', action: 'get_movie',
-is_camrip: v ? v.camrip : '0', is_ads: v ? v.ads : '0', is_director: v ? v.director : '0' };
-}
+function doStream(tid2, onBad) {
+var form = { id: card.contentId, action: 'get_stream', favs: '0' };
+if (tid2 !== '') form.translator_id = tid2;
+if (card.isSerial && season && episode) { form.season = season; form.episode = episode; }
+if (v) { form.is_camrip = v.camrip; form.is_ads = v.ads; form.is_director = v.director; }
 getJsonAny(ajaxRel('ajax/get_cdn_series/'), form, card.rel, card._mirror, function (data) {
-    if (!data || !data.success) {
-        // Фолбэк для тайтлов без списка озвучек: парсим URL прямо из HTML карточки
-        var q0 = streamFromHtml(card);
-        if (q0 && Object.keys(q0).length) { cb(q0); return; }
-        // Если translator_id отвергнут — пробуем с '0' (резервный вариант)
-        if (data && /найти|озвуч|translator/i.test(data.message || '') && form.translator_id !== '0') {
-            form.translator_id = '0';
-            getJsonAny(ajaxRel('ajax/get_cdn_series/'), form, card.rel, card._mirror, function (d2) {
-                if (d2 && d2.success) {
-                    var m2 = parseQualityList(d2.url || d2.streams);
-                    if (Object.keys(m2).length) { cb(m2); return; }
-                }
-                var q1 = streamFromHtml(card);
-                if (q1 && Object.keys(q1).length) { cb(q1); return; }
-                Lampa.Noty.show('Rezka: ' + ((data && data.message) || 'нет ссылки'), { style: 'error' });
-                fail(new Error((data && data.message) || 'нет ссылки'));
-            }, fail);
-            return;
-        }
-        var msg = (data && data.message) || 'сервер не вернул ссылку';
-        Lampa.Noty.show('Rezka: ' + msg, { style: 'error' });
-        fail(new Error(msg));
-        return;
-    }
+if (!data || !data.success) { onBad(data); return; }
 var map = parseQualityList(data.url || data.streams);
-if (!Object.keys(map).length) {
+if (!Object.keys(map).length) { onBad(data); return; }
+card._tid = tid2;
+cb(map);
+}, function () { onBad(null); });
+}
+var tid = voiceId || card._tid || card.defaultTranslatorId || '';
+doStream(tid, function (data) {
+var msg = (data && data.message) || '';
+if (data && /озвуч|сесси|found|expired/i.test(msg) === false) {
 var q0 = streamFromHtml(card);
 if (q0 && Object.keys(q0).length) { cb(q0); return; }
-fail(new Error('сервер не вернул ссылку'));
+fail(new Error(msg || 'сервер не вернул ссылку'));
 return;
 }
-cb(map);
-}, function (e) {
+var cands = extractTidCandidates(card);
+var j = 0;
+(function step() {
+if (j >= cands.length) {
 var q0 = streamFromHtml(card);
 if (q0 && Object.keys(q0).length) { cb(q0); return; }
-fail(e);
+fail(new Error(msg || 'сервер не вернул ссылку'));
+return;
+}
+var t2 = cands[j++];
+if (t2 === tid) { step(); return; }
+doStream(t2, function () { step(); });
+})();
 });
 }
 
