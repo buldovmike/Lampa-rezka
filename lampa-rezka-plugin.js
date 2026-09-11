@@ -870,6 +870,7 @@ hash: meta.hash,
 timeline: Lampa.Timeline.view(meta.hash),
 rezka: sanitizeMeta(meta)
 };
+Lampa.Player.runas('lampa');
 Lampa.Player.play(file);
 if (playlist && playlist.length > 1) Lampa.Player.playlist(playlist);
 }, function (e) {
