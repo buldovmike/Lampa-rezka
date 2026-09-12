@@ -212,7 +212,7 @@ return r.text().then(function (text) { return { status: r.status, text: text }; 
 })
 .then(function (res) {
 if (mode === 'direct') { try { jarMerge(host, document.cookie); } catch (e) {} }
-var dead = !res.text || res.text.length < 600 || /<title[^>]*>\s*(ВХОД|Вход|Login)/i.test(res.text);
+var dead = !res.text || (!options.ajax && res.text.length < 600) || /<title[^>]*>\s*(ВХОД|Вход|Login)/i.test(res.text);
 if (dead && !options._nologin && stGet('email') && stGet('password') && rel.indexOf('ajax/login') !== 0) {
 apiLogin(function (ok) {
 if (ok) {
@@ -873,6 +873,80 @@ rezka: sanitizeMeta(meta)
 };
 Lampa.Player.runas('lampa');
 Lampa.Player.play(file);
+setTimeout(function () {
+    try {
+        var v = document.querySelector('.player-video__video');
+
+        if (!v) {
+            console.log('[rezka-debug] VIDEO NOT FOUND');
+            return;
+        }
+
+        console.log('[rezka-debug] VIDEO FOUND', {
+            src: v.currentSrc || v.src || '',
+            readyState: v.readyState,
+            networkState: v.networkState,
+            paused: v.paused,
+            duration: v.duration,
+            currentTime: v.currentTime,
+            error: v.error ? {
+                code: v.error.code,
+                message: v.error.message
+            } : null,
+            canPlayHLS: typeof v.canPlayType === 'function'
+                ? v.canPlayType('application/vnd.apple.mpegurl')
+                : 'no canPlayType'
+        });
+
+        ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay',
+         'playing', 'waiting', 'stalled', 'suspend', 'abort',
+         'error', 'emptied', 'durationchange', 'progress'].forEach(function (name) {
+            v.addEventListener(name, function () {
+                console.log('[rezka-debug] VIDEO EVENT', name, {
+                    src: v.currentSrc || v.src || '',
+                    readyState: v.readyState,
+                    networkState: v.networkState,
+                    paused: v.paused,
+                    duration: v.duration,
+                    currentTime: v.currentTime,
+                    error: v.error ? {
+                        code: v.error.code,
+                        message: v.error.message
+                    } : null
+                });
+            });
+        });
+
+        setTimeout(function () {
+            console.log('[rezka-debug] VIDEO AFTER 10S', {
+                src: v.currentSrc || v.src || '',
+                readyState: v.readyState,
+                networkState: v.networkState,
+                paused: v.paused,
+                duration: v.duration,
+                currentTime: v.currentTime,
+                buffered: (function () {
+                    try {
+                        var a = [];
+                        for (var i = 0; i < v.buffered.length; i++) {
+                            a.push([v.buffered.start(i), v.buffered.end(i)]);
+                        }
+                        return a;
+                    } catch (e) {
+                        return [];
+                    }
+                })(),
+                error: v.error ? {
+                    code: v.error.code,
+                    message: v.error.message
+                } : null
+            });
+        }, 10000);
+
+    } catch (e) {
+        console.log('[rezka-debug] VIDEO DIAG ERROR', e && e.stack || e);
+    }
+}, 2000);
 if (playlist && playlist.length > 1) Lampa.Player.playlist(playlist);
 }, function (e) {
 Lampa.Loading.stop();
@@ -947,14 +1021,27 @@ function initPlayerHooks() {
             try { p = Lampa.Timeline.view(hashFor(cur)).percent || 0; } catch (e) {}
             cur.percent = p;
             histPush(cur);
-            var watchForm = {
-                id: cur._card.contentId,
-                season: cur.season || '',
-                episode: cur.episode || '',
-                translator_id: cur.voice_id || '',
-                percent: Math.round(p)
-            };
-            getJsonAny(ajaxRel('ajax/send_watching/'), watchForm, cur._card.rel, cur._card._mirror, function () {}, function () {});
+        var watchForm = {
+            action: 'add',
+            id: cur._card.contentId
+        };
+
+        if (cur.voice_id) watchForm.translator_id = cur.voice_id;
+        if (cur.season) watchForm.season = cur.season;
+        if (cur.episode) watchForm.episode = cur.episode;
+
+        getJsonAny(
+            ajaxRel('ajax/send_watching/'),
+            watchForm,
+            cur._card.rel,
+            cur._card._mirror,
+            function (d, r) {
+                log('send_watching:', r && r.status, snippet(r && r.text, 120));
+            },
+            function (e) {
+                log('send_watching ERR:', e && e.message);
+            }
+        );
         }
         
         // Периодическая синхронизация каждые 30 секунд во время просмотра
