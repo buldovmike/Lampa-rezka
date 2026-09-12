@@ -875,6 +875,84 @@ Lampa.Player.runas('lampa');
 Lampa.Player.play(file);
 setTimeout(function () {
     try {
+        var pv = Lampa.PlayerVideo;
+
+        if (!pv || typeof pv.video !== 'function') {
+            log('direct-native: no PlayerVideo.video');
+            return;
+        }
+
+        var v = pv.video();
+
+        if (!v) {
+            log('direct-native: no video element');
+            return;
+        }
+
+        if (!/\.m3u8(?:\?|$)/i.test(file.url)) {
+            log('direct-native: not m3u8');
+            return;
+        }
+
+        var before = {
+            src: v.currentSrc || v.src || '',
+            readyState: v.readyState,
+            networkState: v.networkState,
+            paused: v.paused,
+            duration: v.duration,
+            currentTime: v.currentTime,
+            error: v.error ? { code: v.error.code, message: v.error.message } : null,
+            canPlayHLS: typeof v.canPlayType === 'function'
+                ? v.canPlayType('application/vnd.apple.mpegurl')
+                : 'no canPlayType'
+        };
+
+        log('direct-native BEFORE', before);
+
+        if (
+            v.readyState === 0 &&
+            v.networkState === 0 &&
+            v.paused &&
+            !v.error &&
+            typeof pv.url === 'function'
+        ) {
+            log('direct-native: force direct native HLS load', file.url);
+
+            pv.url(file.url, true);
+
+            setTimeout(function () {
+                try {
+                    log('direct-native AFTER', {
+                        src: v.currentSrc || v.src || '',
+                        readyState: v.readyState,
+                        networkState: v.networkState,
+                        paused: v.paused,
+                        duration: v.duration,
+                        currentTime: v.currentTime,
+                        error: v.error ? {
+                            code: v.error.code,
+                            message: v.error.message
+                        } : null
+                    });
+                } catch (e) {
+                    log('direct-native AFTER error', e && e.message);
+                }
+            }, 1500);
+        } else {
+            log('direct-native: skipped', {
+                hasUrlFunction: typeof pv.url === 'function',
+                readyState: v.readyState,
+                networkState: v.networkState,
+                paused: v.paused,
+                error: v.error ? v.error.code : null
+            });
+        }
+    } catch (e) {
+        log('direct-native error', e && e.message);
+    }
+}, 800);
+/* setTimeout(function () {
+    try {
         var v = Lampa.PlayerVideo && Lampa.PlayerVideo.video
             ? Lampa.PlayerVideo.video()
             : null;
@@ -1027,7 +1105,7 @@ setTimeout(function () {
     } catch (e) {
         console.log('[rezka-debug] VIDEO DIAG ERROR', e && e.stack || e);
     }
-}, 2000);
+}, 2000); */
 if (playlist && playlist.length > 1) Lampa.Player.playlist(playlist);
 }, function (e) {
 Lampa.Loading.stop();
