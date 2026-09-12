@@ -866,6 +866,7 @@ url: initial,
 quality: quality,
 subtitles: [],
 isonline: true,
+hls_type: 'native',
 hash: meta.hash,
 timeline: Lampa.Timeline.view(meta.hash),
 rezka: sanitizeMeta(meta)
@@ -929,7 +930,14 @@ function initPlayerHooks() {
             if (cur.season) saveForm.season = cur.season;
             if (cur.episode) saveForm.episode = cur.episode;
             if (cur.voice_id) saveForm.translator_id = cur.voice_id;
-            getJsonAny(ajaxRel('ajax/send_save/'), saveForm, cur._card.rel, cur._card._mirror, function () {}, function () {});
+            getJsonAny(ajaxRel('ajax/send_save/'), saveForm, cur._card.rel, cur._card._mirror,
+                function (d, r) {
+                    log('send_save:', r && r.status, snippet(r && r.text, 200));
+                },
+                function (e) {
+                    log('send_save ERR:', e && e.message);
+                }
+            );
         }
         
         // send_watching: синхронизирует прогресс просмотра с rezka
