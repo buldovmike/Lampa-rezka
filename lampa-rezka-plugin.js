@@ -8,6 +8,111 @@ window.rezka_plugin_ready = true;
 var COMP_MAIN = 'rezka_main', COMP_LIST = 'rezka_list', COMP_CARD = 'rezka_card';
 function log() { try { console.log.apply(console, ['[rezka]'].concat([].slice.call(arguments))); } catch (e) {} }
 
+window.__rezka_last_stream = '';
+
+function rezkaRawVideoTest(url) {
+    if (!url) {
+        Lampa.Noty.show('Rezka raw test: нет сохранённого потока. Сначала нажмите Смотреть.');
+        return;
+    }
+
+    log('raw-test start', url);
+
+    var $wrap = $('<div style="position:fixed;left:0;top:0;width:100%;height:100%;background:#000;z-index:999999;"></div>');
+    var $info = $('<div style="position:absolute;left:1em;top:1em;right:1em;z-index:2;color:#fff;font-size:14px;line-height:1.35;white-space:pre-wrap;"></div>');
+
+    var v = document.createElement('video');
+
+    v.style.width = '100%';
+    v.style.height = '100%';
+
+    v.setAttribute('playsinline', '');
+    v.setAttribute('webkit-playsinline', '');
+
+    v.preload = 'auto';
+    v.muted = false;
+
+    try {
+        v.removeAttribute('crossorigin');
+        v.crossOrigin = null;
+    } catch (e) {}
+
+    function state(prefix) {
+        var st = {
+            src: v.currentSrc || v.src || '',
+            readyState: v.readyState,
+            networkState: v.networkState,
+            paused: v.paused,
+            muted: v.muted,
+            currentTime: v.currentTime,
+            duration: v.duration,
+            error: v.error ? {
+                code: v.error.code,
+                message: v.error.message
+            } : null
+        };
+
+        var text = prefix + '\n' + JSON.stringify(st, null, 1);
+
+        try {
+            $info.text(text);
+        } catch (e) {}
+
+        log('raw-test', text);
+    }
+
+    ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay', 'canplaythrough',
+     'playing', 'waiting', 'stalled', 'suspend', 'abort', 'emptied', 'error'].forEach(function (ev) {
+        v.addEventListener(ev, function () {
+            state('event: ' + ev);
+        });
+    });
+
+    function removeLater(ms) {
+        setTimeout(function () {
+            try { $wrap.remove(); } catch (e) {}
+        }, ms || 20000);
+    }
+
+    $wrap.append(v);
+    $wrap.append($info);
+    $('body').append($wrap);
+
+    v.src = url;
+    v.load();
+
+    state('after load');
+
+    var p = v.play();
+
+    function retryMuted(err) {
+        state('unmuted play failed: ' + (err && err.name ? err.name : err));
+
+        v.muted = true;
+
+        var p2 = v.play();
+
+        if (p2 && typeof p2.then === 'function') {
+            p2.then(function () {
+                state('muted play OK');
+                removeLater(30000);
+            }).catch(function (err2) {
+                state('muted play failed: ' + (err2 && err2.name ? err2.name : err2));
+                removeLater(15000);
+            });
+        }
+    }
+
+    if (p && typeof p.then === 'function') {
+        p.then(function () {
+            state('unmuted play OK');
+            removeLater(30000);
+        }).catch(retryMuted);
+    } else {
+        removeLater(20000);
+    }
+}
+
 // === REZKA AUTOPLAY TEST ===
 var rezkaAutoplayTest = {
     armed: false,
@@ -972,6 +1077,7 @@ Lampa.Loading.stop();
 var keys = Object.keys(quality);
 if (!keys.length) { Lampa.Noty.show('Rezka: не удалось получить ссылку', { style: 'error' }); return; }
 var initial = pickInitial(quality);
+window.__rezka_last_stream = initial;
 var qlabel = labelOfUrl(quality, initial) || 'AUTO';
 meta.hash = hashFor(meta);
 var file = {
@@ -2266,6 +2372,41 @@ component: 'rezka',
 param: { name: 'rezka_clear_hist', type: 'button', default: '' },
 field: { name: 'Очистить историю плагина' },
 onChange: function () { stSet('history', []); Lampa.Noty.show('История Rezka очищена'); }
+});
+Lampa.SettingsApi.addParam({
+    component: 'rezka',
+    param: {
+        name: 'rezka_raw_test_m3u8',
+        type: 'button',
+        default: ''
+    },
+    field: {
+        name: 'Raw test: последний .m3u8',
+        description: 'Создаёт чистый <video> и пытается сыграть последний Rezka stream'
+    },
+    onChange: function () {
+        rezkaRawVideoTest(window.__rezka_last_stream || '');
+    }
+});
+
+Lampa.SettingsApi.addParam({
+    component: 'rezka',
+    param: {
+        name: 'rezka_raw_test_mp4',
+        type: 'button',
+        default: ''
+    },
+    field: {
+        name: 'Raw test: последний .mp4',
+        description: 'Пробует прямой .mp4 вместо .mp4:hls:manifest.m3u8'
+    },
+    onChange: function () {
+        var u = window.__rezka_last_stream || '';
+
+        u = String(u).replace(/:hls:manifest\.m3u8(\?|$)/i, '');
+
+        rezkaRawVideoTest(u);
+    }
 });
 }
 
