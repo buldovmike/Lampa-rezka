@@ -875,6 +875,31 @@ Lampa.Player.runas('lampa');
 Lampa.Player.play(file);
 setTimeout(function () {
     try {
+        console.log('[rezka-debug] PlayerVideo=', typeof Lampa.PlayerVideo, Lampa.PlayerVideo);
+
+        if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.video === 'function') {
+            var v = Lampa.PlayerVideo.video();
+
+            console.log('[rezka-debug] PlayerVideo.video=', v, {
+                currentTime: v && v.currentTime,
+                duration: v && v.duration,
+                paused: v && v.paused,
+                readyState: v && v.readyState,
+                networkState: v && v.networkState,
+                error: v && v.error
+                    ? {
+                        code: v.error.code,
+                        message: v.error.message
+                    }
+                    : null
+            });
+        }
+    } catch (e) {
+        console.log('[rezka-debug] PlayerVideo error:', e && e.stack || e);
+    }
+}, 3000);
+setTimeout(function () {
+    try {
         var v = document.querySelector('.player-video__video');
 
         if (!v) {
