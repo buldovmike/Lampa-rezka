@@ -8,6 +8,120 @@ window.rezka_plugin_ready = true;
 var COMP_MAIN = 'rezka_main', COMP_LIST = 'rezka_list', COMP_CARD = 'rezka_card';
 function log() { try { console.log.apply(console, ['[rezka]'].concat([].slice.call(arguments))); } catch (e) {} }
 
+// === REZKA AUTOPLAY TEST ===
+var rezkaAutoplayTest = {
+    armed: false,
+    timer: null,
+
+    arm: function () {
+        this.armed = true;
+
+        if (this.timer) clearTimeout(this.timer);
+
+        var self = this;
+        this.timer = setTimeout(function () {
+            self.armed = false;
+        }, 20000);
+    },
+
+    disarm: function () {
+        this.armed = false;
+
+        if (this.timer) clearTimeout(this.timer);
+        this.timer = null;
+    }
+};
+
+(function () {
+    if (window.__rezkaAutoplayPatched) return;
+    window.__rezkaAutoplayPatched = true;
+
+    try {
+        if (
+            !window.HTMLMediaElement ||
+            !HTMLMediaElement.prototype ||
+            typeof HTMLMediaElement.prototype.play !== 'function'
+        ) {
+            return;
+        }
+
+        var origPlay = HTMLMediaElement.prototype.play;
+
+        HTMLMediaElement.prototype.play = function () {
+            var el = this;
+
+            if (rezkaAutoplayTest.armed && el && el.tagName === 'VIDEO') {
+                var prevMuted = el.muted;
+                var prevVolume = el.volume;
+
+                log('autoplay-test: forcing muted play', {
+                    src: el.currentSrc || el.src || '',
+                    readyState: el.readyState,
+                    networkState: el.networkState,
+                    paused: el.paused,
+                    muted: el.muted,
+                    volume: el.volume
+                });
+
+                try {
+                    el.muted = true;
+                } catch (e) {}
+
+                var p = origPlay.apply(el, arguments);
+
+                if (p && typeof p.then === 'function') {
+                    p.then(function () {
+                        log('autoplay-test: muted play OK', {
+                            src: el.currentSrc || el.src || '',
+                            readyState: el.readyState,
+                            networkState: el.networkState,
+                            paused: el.paused,
+                            currentTime: el.currentTime,
+                            duration: el.duration
+                        });
+
+                        setTimeout(function () {
+                            try {
+                                el.muted = prevMuted;
+                                el.volume = prevVolume;
+
+                                log('autoplay-test: audio restored', {
+                                    muted: el.muted,
+                                    volume: el.volume,
+                                    paused: el.paused,
+                                    currentTime: el.currentTime,
+                                    readyState: el.readyState,
+                                    networkState: el.networkState
+                                });
+                            } catch (e) {
+                                log('autoplay-test: restore error', e && e.message);
+                            }
+                        }, 300);
+                    }).catch(function (err) {
+                        log('autoplay-test: muted play FAILED', err && err.name, err && err.message, {
+                            src: el.currentSrc || el.src || '',
+                            readyState: el.readyState,
+                            networkState: el.networkState,
+                            paused: el.paused,
+                            muted: el.muted,
+                            volume: el.volume
+                        });
+                    });
+                } else {
+                    log('autoplay-test: play() returned no promise');
+                }
+
+                return p;
+            }
+
+            return origPlay.apply(el, arguments);
+        };
+    } catch (e) {
+        log('autoplay-test patch failed', e && e.message);
+    }
+})();
+// === END REZKA AUTOPLAY TEST ===
+
 (function () {
 try {
 var origStringify = JSON.stringify;
@@ -871,9 +985,11 @@ hash: meta.hash,
 timeline: Lampa.Timeline.view(meta.hash),
 rezka: sanitizeMeta(meta)
 };
+rezkaAutoplayTest.arm();
+
 Lampa.Player.runas('lampa');
 Lampa.Player.play(file);
-setTimeout(function () {
+/*setTimeout(function () {
     try {
         var pv = Lampa.PlayerVideo;
 
@@ -950,7 +1066,7 @@ setTimeout(function () {
     } catch (e) {
         log('direct-native error', e && e.message);
     }
-}, 800);
+}, 800); */
 /* setTimeout(function () {
     try {
         var v = Lampa.PlayerVideo && Lampa.PlayerVideo.video
