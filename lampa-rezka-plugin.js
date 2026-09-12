@@ -875,6 +875,62 @@ Lampa.Player.runas('lampa');
 Lampa.Player.play(file);
 setTimeout(function () {
     try {
+        var v = Lampa.PlayerVideo && Lampa.PlayerVideo.video
+            ? Lampa.PlayerVideo.video()
+            : null;
+
+        if (!v) {
+            console.log('[rezka-debug] no PlayerVideo.video');
+            return;
+        }
+
+        var src = v.currentSrc || v.src;
+
+        console.log('[rezka-debug] DIRECT TEST BEFORE', {
+            src: src,
+            canPlay: v.canPlayType('application/vnd.apple.mpegurl'),
+            readyState: v.readyState,
+            networkState: v.networkState,
+            paused: v.paused
+        });
+
+        if (src) {
+            v.load();
+
+            setTimeout(function () {
+                console.log('[rezka-debug] DIRECT TEST AFTER LOAD', {
+                    src: v.currentSrc || v.src,
+                    readyState: v.readyState,
+                    networkState: v.networkState,
+                    duration: v.duration,
+                    error: v.error ? {
+                        code: v.error.code,
+                        message: v.error.message
+                    } : null
+                });
+
+                try {
+                    var p = v.play();
+
+                    if (p && typeof p.catch === 'function') {
+                        p.catch(function (e) {
+                            console.log('[rezka-debug] DIRECT PLAY ERROR', {
+                                name: e && e.name,
+                                message: e && e.message
+                            });
+                        });
+                    }
+                } catch (e) {
+                    console.log('[rezka-debug] DIRECT PLAY THROW', e && e.message);
+                }
+            }, 2000);
+        }
+    } catch (e) {
+        console.log('[rezka-debug] DIRECT TEST ERROR', e && e.stack || e);
+    }
+}, 3000);
+setTimeout(function () {
+    try {
         console.log('[rezka-debug] PlayerVideo=', typeof Lampa.PlayerVideo, Lampa.PlayerVideo);
 
         if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.video === 'function') {
