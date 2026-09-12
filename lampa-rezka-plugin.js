@@ -576,6 +576,22 @@ if (single) map[/\.m3u8/.test(single[0]) ? 'AUTO' : '1080p'] = single[0];
 }
 return map;
 }
+
+function wrapQualityMap(map) {
+    var p = proxyUrl();
+    if (!p) return map;
+    var out = {};
+    for (var k in map) {
+        var url = map[k];
+        if (/voidslam\.org|emerald\.|cdn/i.test(url)) {
+            out[k] = p + '?r=' + encodeURIComponent(url.replace(/\|/g, '%7C'));
+        } else {
+            out[k] = url;
+        }
+    }
+    return out;
+}
+    
 function pickInitial(map) {
 var pref = stGet('quality', 'auto');
 if (map[pref]) return map[pref];
@@ -735,7 +751,7 @@ if (card.translators[i].id === voiceId) v = card.translators[i];
 var tid = voiceId || card.defaultTranslatorId || (card.translators && card.translators.length ? card.translators[0].id : '');
 if (!tid && card.defaultStreams) {
     var qd = buildQuality(card.defaultStreams);
-    if (Object.keys(qd).length) { cb(qd); return; }
+    if (Object.keys(qd).length) { cb(wrapQualityMap(qd)); return; }
 }
 var form;
 if (card.isSerial && season && episode) {
@@ -748,7 +764,7 @@ getJsonAny(ajaxRel('ajax/get_cdn_series/'), form, card.rel, card._mirror, functi
     if (!data || !data.success) {
         // Фолбэк для тайтлов без списка озвучек: парсим URL прямо из HTML карточки
         var q0 = streamFromHtml(card);
-        if (q0 && Object.keys(q0).length) { cb(q0); return; }
+        if (q0 && Object.keys(q0).length) { cb(wrapQualityMap(q0)); return; }
         // Если translator_id отвергнут — пробуем с '0' (резервный вариант)
         /*if (data && /найти|озвуч|translator/i.test(data.message || '') && form.translator_id !== '0') {
             form.translator_id = '0';
@@ -771,16 +787,16 @@ getJsonAny(ajaxRel('ajax/get_cdn_series/'), form, card.rel, card._mirror, functi
     }
 var map = parseQualityList(data.url || data.streams);
 if (!Object.keys(map).length) {
-var q0 = streamFromHtml(card);
-if (q0 && Object.keys(q0).length) { cb(q0); return; }
-fail(new Error('сервер не вернул ссылку'));
-return;
+    var q0 = streamFromHtml(card);
+    if (q0 && Object.keys(q0).length) { cb(wrapQualityMap(q0)); return; }
+    fail(new Error('сервер не вернул ссылку'));
+    return;
 }
-cb(map);
+cb(wrapQualityMap(map));
 }, function (e) {
-var q0 = streamFromHtml(card);
-if (q0 && Object.keys(q0).length) { cb(q0); return; }
-fail(e);
+    var q0 = streamFromHtml(card);
+    if (q0 && Object.keys(q0).length) { cb(wrapQualityMap(q0)); return; }
+    fail(e);
 });
 }
 
