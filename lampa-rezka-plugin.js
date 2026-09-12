@@ -577,7 +577,7 @@ if (single) map[/\.m3u8/.test(single[0]) ? 'AUTO' : '1080p'] = single[0];
 return map;
 }
 
-function wrapQualityMap(map) {
+/*function wrapQualityMap(map) {
     var p = proxyUrl();
     if (!p) return map;
     var out = {};
@@ -590,7 +590,7 @@ function wrapQualityMap(map) {
         }
     }
     return out;
-}
+} */
     
 function pickInitial(map) {
 var pref = stGet('quality', 'auto');
@@ -889,6 +889,11 @@ rezka: sanitizeMeta(meta)
 };
 Lampa.Player.runas('lampa');
 Lampa.Player.play(file);
+
+setTimeout(function () {
+    var pv = Lampa.PlayerVideo;
+    if (pv && pv.url) pv.url(file.url, true);
+}, 800);
         
 setTimeout(function () {
     try {
