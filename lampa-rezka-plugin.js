@@ -584,7 +584,7 @@ function wrapQualityMap(map) {
     for (var k in map) {
         var url = map[k];
         if (/voidslam\.org|emerald\.|cdn/i.test(url)) {
-            out[k] = p + '?r=' + encodeURIComponent(url.replace(/\|/g, '%7C'));
+            out[k] = p + '?r=' + encodeURIComponent(url);
         } else {
             out[k] = url;
         }
