@@ -113,120 +113,6 @@ function rezkaRawVideoTest(url) {
     }
 }
 
-// === REZKA AUTOPLAY TEST ===
-var rezkaAutoplayTest = {
-    armed: false,
-    timer: null,
-
-    arm: function () {
-        this.armed = true;
-
-        if (this.timer) clearTimeout(this.timer);
-
-        var self = this;
-        this.timer = setTimeout(function () {
-            self.armed = false;
-        }, 20000);
-    },
-
-    disarm: function () {
-        this.armed = false;
-
-        if (this.timer) clearTimeout(this.timer);
-        this.timer = null;
-    }
-};
-
-(function () {
-    if (window.__rezkaAutoplayPatched) return;
-    window.__rezkaAutoplayPatched = true;
-
-    try {
-        if (
-            !window.HTMLMediaElement ||
-            !HTMLMediaElement.prototype ||
-            typeof HTMLMediaElement.prototype.play !== 'function'
-        ) {
-            return;
-        }
-
-        var origPlay = HTMLMediaElement.prototype.play;
-
-        HTMLMediaElement.prototype.play = function () {
-            var el = this;
-
-            if (rezkaAutoplayTest.armed && el && el.tagName === 'VIDEO') {
-                var prevMuted = el.muted;
-                var prevVolume = el.volume;
-
-                log('autoplay-test: forcing muted play', {
-                    src: el.currentSrc || el.src || '',
-                    readyState: el.readyState,
-                    networkState: el.networkState,
-                    paused: el.paused,
-                    muted: el.muted,
-                    volume: el.volume
-                });
-
-                try {
-                    el.muted = true;
-                } catch (e) {}
-
-                var p = origPlay.apply(el, arguments);
-
-                if (p && typeof p.then === 'function') {
-                    p.then(function () {
-                        log('autoplay-test: muted play OK', {
-                            src: el.currentSrc || el.src || '',
-                            readyState: el.readyState,
-                            networkState: el.networkState,
-                            paused: el.paused,
-                            currentTime: el.currentTime,
-                            duration: el.duration
-                        });
-
-                        setTimeout(function () {
-                            try {
-                                el.muted = prevMuted;
-                                el.volume = prevVolume;
-
-                                log('autoplay-test: audio restored', {
-                                    muted: el.muted,
-                                    volume: el.volume,
-                                    paused: el.paused,
-                                    currentTime: el.currentTime,
-                                    readyState: el.readyState,
-                                    networkState: el.networkState
-                                });
-                            } catch (e) {
-                                log('autoplay-test: restore error', e && e.message);
-                            }
-                        }, 300);
-                    }).catch(function (err) {
-                        log('autoplay-test: muted play FAILED', err && err.name, err && err.message, {
-                            src: el.currentSrc || el.src || '',
-                            readyState: el.readyState,
-                            networkState: el.networkState,
-                            paused: el.paused,
-                            muted: el.muted,
-                            volume: el.volume
-                        });
-                    });
-                } else {
-                    log('autoplay-test: play() returned no promise');
-                }
-
-                return p;
-            }
-
-            return origPlay.apply(el, arguments);
-        };
-    } catch (e) {
-        log('autoplay-test patch failed', e && e.message);
-    }
-})();
-// === END REZKA AUTOPLAY TEST ===
-
 (function () {
 try {
 var origStringify = JSON.stringify;
@@ -946,6 +832,63 @@ getJsonAny(ajaxRel('ajax/get_cdn_series/'), formE, card.rel, card._mirror, funct
     fail(e);
 });
 }
+
+function streamCacheKey(card, voiceId, season, episode) {
+    return [
+        (card && (card.contentId || card.rel)) || '',
+        voiceId || '',
+        season || '',
+        episode || ''
+    ].join('|');
+}
+
+function streamCacheGet(card, voiceId, season, episode) {
+    if (!card) return null;
+
+    card._streamCache = card._streamCache || {};
+
+    return card._streamCache[streamCacheKey(card, voiceId, season, episode)] || null;
+}
+
+function streamCacheSet(card, voiceId, season, episode, quality) {
+    if (!card) return;
+    if (!quality || !Object.keys(quality).length) return;
+
+    card._streamCache = card._streamCache || {};
+
+    card._streamCache[streamCacheKey(card, voiceId, season, episode)] = quality;
+}
+
+function prefetchStream(card, voiceId, season, episode) {
+    if (!card || !card.contentId) return;
+
+    var cached = streamCacheGet(card, voiceId, season, episode);
+
+    if (cached) {
+        log('prefetchStream: already cached', {
+            season: season,
+            episode: episode
+        });
+        return;
+    }
+
+    log('prefetchStream: resolving', {
+        season: season,
+        episode: episode
+    });
+
+    apiStream(card, voiceId, season, episode, function (quality) {
+        streamCacheSet(card, voiceId, season, episode, quality);
+        log('prefetchStream: cached', {
+            season: season,
+            episode: episode,
+            qualities: Object.keys(quality)
+        });
+    }, function (e) {
+        log('prefetchStream failed:', e && e.message);
+    });
+}
+
 function apiStream(card, voiceId, season, episode, cb, fail) {
 var v = null, i;
 for (i = 0; i < (card.translators || []).length; i++) {
@@ -1069,270 +1012,72 @@ histSave(list);
 function percentOf(meta) {
 try { return Lampa.Timeline.view(hashFor(meta)).percent || 0; } catch (e) { return 0; }
 }
+function playMetaWithQuality(meta, quality, playlist) {
+    var keys = Object.keys(quality);
 
+    if (!keys.length) {
+        Lampa.Noty.show('Rezka: не удалось получить ссылку', { style: 'error' });
+        return;
+    }
+
+    var initial = pickInitial(quality);
+    var qlabel = labelOfUrl(quality, initial) || 'AUTO';
+
+    meta.hash = hashFor(meta);
+
+    window.__rezka_last_stream = initial;
+
+    log('playMetaWithQuality', {
+        url: initial,
+        season: meta.season,
+        episode: meta.episode,
+        voice: meta.voice_id
+    });
+
+    var file = {
+        title: meta.title + (meta.season ? ' (S' + meta.season + ' E' + meta.episode + ')' : '') + ' · ' + qlabel,
+        url: initial,
+        quality: quality,
+        subtitles: [],
+        isonline: true,
+        hls_type: 'native',
+        hash: meta.hash,
+        timeline: Lampa.Timeline.view(meta.hash),
+        rezka: sanitizeMeta(meta)
+    };
+
+    Lampa.Player.runas('lampa');
+    Lampa.Player.play(file);
+
+    if (playlist && playlist.length > 1) {
+        Lampa.Player.playlist(playlist);
+    }
+}
 function playMeta(meta, playlist) {
-Lampa.Loading.start(function () { Lampa.Loading.stop(); });
-apiStream(meta._card, meta.voice_id, meta.season, meta.episode, function (quality) {
-Lampa.Loading.stop();
-var keys = Object.keys(quality);
-if (!keys.length) { Lampa.Noty.show('Rezka: не удалось получить ссылку', { style: 'error' }); return; }
-var initial = pickInitial(quality);
-window.__rezka_last_stream = initial;
-var qlabel = labelOfUrl(quality, initial) || 'AUTO';
-meta.hash = hashFor(meta);
-var file = {
-title: meta.title + (meta.season ? ' (S' + meta.season + ' E' + meta.episode + ')' : '') + ' · ' + qlabel,
-url: initial,
-quality: quality,
-subtitles: [],
-isonline: true,
-hls_type: 'native',
-hash: meta.hash,
-timeline: Lampa.Timeline.view(meta.hash),
-rezka: sanitizeMeta(meta)
-};
-rezkaAutoplayTest.arm();
+    var cached = streamCacheGet(meta._card, meta.voice_id, meta.season, meta.episode);
 
-Lampa.Player.runas('lampa');
-Lampa.Player.play(file);
-/*setTimeout(function () {
-    try {
-        var pv = Lampa.PlayerVideo;
-
-        if (!pv || typeof pv.video !== 'function') {
-            log('direct-native: no PlayerVideo.video');
-            return;
-        }
-
-        var v = pv.video();
-
-        if (!v) {
-            log('direct-native: no video element');
-            return;
-        }
-
-        if (!/\.m3u8(?:\?|$)/i.test(file.url)) {
-            log('direct-native: not m3u8');
-            return;
-        }
-
-        var before = {
-            src: v.currentSrc || v.src || '',
-            readyState: v.readyState,
-            networkState: v.networkState,
-            paused: v.paused,
-            duration: v.duration,
-            currentTime: v.currentTime,
-            error: v.error ? { code: v.error.code, message: v.error.message } : null,
-            canPlayHLS: typeof v.canPlayType === 'function'
-                ? v.canPlayType('application/vnd.apple.mpegurl')
-                : 'no canPlayType'
-        };
-
-        log('direct-native BEFORE', before);
-
-        if (
-            v.readyState === 0 &&
-            v.networkState === 0 &&
-            v.paused &&
-            !v.error &&
-            typeof pv.url === 'function'
-        ) {
-            log('direct-native: force direct native HLS load', file.url);
-
-            pv.url(file.url, true);
-
-            setTimeout(function () {
-                try {
-                    log('direct-native AFTER', {
-                        src: v.currentSrc || v.src || '',
-                        readyState: v.readyState,
-                        networkState: v.networkState,
-                        paused: v.paused,
-                        duration: v.duration,
-                        currentTime: v.currentTime,
-                        error: v.error ? {
-                            code: v.error.code,
-                            message: v.error.message
-                        } : null
-                    });
-                } catch (e) {
-                    log('direct-native AFTER error', e && e.message);
-                }
-            }, 1500);
-        } else {
-            log('direct-native: skipped', {
-                hasUrlFunction: typeof pv.url === 'function',
-                readyState: v.readyState,
-                networkState: v.networkState,
-                paused: v.paused,
-                error: v.error ? v.error.code : null
-            });
-        }
-    } catch (e) {
-        log('direct-native error', e && e.message);
+    if (cached) {
+        log('playMeta: cache hit, starting immediately');
+        playMetaWithQuality(meta, cached, playlist);
+        return;
     }
-}, 800); */
-/* setTimeout(function () {
-    try {
-        var v = Lampa.PlayerVideo && Lampa.PlayerVideo.video
-            ? Lampa.PlayerVideo.video()
-            : null;
 
-        if (!v) {
-            console.log('[rezka-debug] no PlayerVideo.video');
-            return;
-        }
+    log('playMeta: cache miss, resolving stream');
 
-        var src = v.currentSrc || v.src;
+    Lampa.Loading.start(function () {
+        Lampa.Loading.stop();
+    });
 
-        console.log('[rezka-debug] DIRECT TEST BEFORE', {
-            src: src,
-            canPlay: v.canPlayType('application/vnd.apple.mpegurl'),
-            readyState: v.readyState,
-            networkState: v.networkState,
-            paused: v.paused
-        });
+    apiStream(meta._card, meta.voice_id, meta.season, meta.episode, function (quality) {
+        Lampa.Loading.stop();
 
-        if (src) {
-            v.load();
+        streamCacheSet(meta._card, meta.voice_id, meta.season, meta.episode, quality);
 
-            setTimeout(function () {
-                console.log('[rezka-debug] DIRECT TEST AFTER LOAD', {
-                    src: v.currentSrc || v.src,
-                    readyState: v.readyState,
-                    networkState: v.networkState,
-                    duration: v.duration,
-                    error: v.error ? {
-                        code: v.error.code,
-                        message: v.error.message
-                    } : null
-                });
-
-                try {
-                    var p = v.play();
-
-                    if (p && typeof p.catch === 'function') {
-                        p.catch(function (e) {
-                            console.log('[rezka-debug] DIRECT PLAY ERROR', {
-                                name: e && e.name,
-                                message: e && e.message
-                            });
-                        });
-                    }
-                } catch (e) {
-                    console.log('[rezka-debug] DIRECT PLAY THROW', e && e.message);
-                }
-            }, 2000);
-        }
-    } catch (e) {
-        console.log('[rezka-debug] DIRECT TEST ERROR', e && e.stack || e);
-    }
-}, 3000);
-setTimeout(function () {
-    try {
-        console.log('[rezka-debug] PlayerVideo=', typeof Lampa.PlayerVideo, Lampa.PlayerVideo);
-
-        if (Lampa.PlayerVideo && typeof Lampa.PlayerVideo.video === 'function') {
-            var v = Lampa.PlayerVideo.video();
-
-            console.log('[rezka-debug] PlayerVideo.video=', v, {
-                currentTime: v && v.currentTime,
-                duration: v && v.duration,
-                paused: v && v.paused,
-                readyState: v && v.readyState,
-                networkState: v && v.networkState,
-                error: v && v.error
-                    ? {
-                        code: v.error.code,
-                        message: v.error.message
-                    }
-                    : null
-            });
-        }
-    } catch (e) {
-        console.log('[rezka-debug] PlayerVideo error:', e && e.stack || e);
-    }
-}, 3000);
-setTimeout(function () {
-    try {
-        var v = document.querySelector('.player-video__video');
-
-        if (!v) {
-            console.log('[rezka-debug] VIDEO NOT FOUND');
-            return;
-        }
-
-        console.log('[rezka-debug] VIDEO FOUND', {
-            src: v.currentSrc || v.src || '',
-            readyState: v.readyState,
-            networkState: v.networkState,
-            paused: v.paused,
-            duration: v.duration,
-            currentTime: v.currentTime,
-            error: v.error ? {
-                code: v.error.code,
-                message: v.error.message
-            } : null,
-            canPlayHLS: typeof v.canPlayType === 'function'
-                ? v.canPlayType('application/vnd.apple.mpegurl')
-                : 'no canPlayType'
-        });
-
-        ['loadstart', 'loadedmetadata', 'loadeddata', 'canplay',
-         'playing', 'waiting', 'stalled', 'suspend', 'abort',
-         'error', 'emptied', 'durationchange', 'progress'].forEach(function (name) {
-            v.addEventListener(name, function () {
-                console.log('[rezka-debug] VIDEO EVENT', name, {
-                    src: v.currentSrc || v.src || '',
-                    readyState: v.readyState,
-                    networkState: v.networkState,
-                    paused: v.paused,
-                    duration: v.duration,
-                    currentTime: v.currentTime,
-                    error: v.error ? {
-                        code: v.error.code,
-                        message: v.error.message
-                    } : null
-                });
-            });
-        });
-
-        setTimeout(function () {
-            console.log('[rezka-debug] VIDEO AFTER 10S', {
-                src: v.currentSrc || v.src || '',
-                readyState: v.readyState,
-                networkState: v.networkState,
-                paused: v.paused,
-                duration: v.duration,
-                currentTime: v.currentTime,
-                buffered: (function () {
-                    try {
-                        var a = [];
-                        for (var i = 0; i < v.buffered.length; i++) {
-                            a.push([v.buffered.start(i), v.buffered.end(i)]);
-                        }
-                        return a;
-                    } catch (e) {
-                        return [];
-                    }
-                })(),
-                error: v.error ? {
-                    code: v.error.code,
-                    message: v.error.message
-                } : null
-            });
-        }, 10000);
-
-    } catch (e) {
-        console.log('[rezka-debug] VIDEO DIAG ERROR', e && e.stack || e);
-    }
-}, 2000); */
-if (playlist && playlist.length > 1) Lampa.Player.playlist(playlist);
-}, function (e) {
-Lampa.Loading.stop();
-Lampa.Noty.show('Rezka: ' + e.message, { style: 'error' });
-});
+        playMetaWithQuality(meta, quality, playlist);
+    }, function (e) {
+        Lampa.Loading.stop();
+        Lampa.Noty.show('Rezka: ' + e.message, { style: 'error' });
+    });
 }
 function buildSeasonPlaylist(card, baseMeta, episodes, cb) {
     var res = new Array(episodes.length), done = 0, aborted = false;
@@ -1848,11 +1593,55 @@ voice_id: v.id, voice: v.title,
 season: card.isSerial ? seasonId : '', episode: ''
 };
 }
+function prefetchTargetStream() {
+    if (!card || !card.contentId) return;
+
+    if (!card.isSerial) {
+        prefetchStream(card, curVoice().id, '', '');
+        return;
+    }
+
+    if (!episodes.length) return;
+
+    var hist = histGet().filter(function (h) {
+        return h.url === card.rel;
+    })[0];
+
+    var target = object.resume || hist;
+    var ep = null;
+    var i;
+
+    if (lastEpId) {
+        for (i = 0; i < episodes.length; i++) {
+            if (String(episodes[i].id) === String(lastEpId)) {
+                ep = episodes[i];
+                break;
+            }
+        }
+    }
+
+    if (!ep && target) {
+        for (i = 0; i < episodes.length; i++) {
+            if (String(episodes[i].id) === String(target.episode)) {
+                ep = episodes[i];
+                break;
+            }
+        }
+    }
+
+    if (!ep) ep = episodes[0];
+
+    if (ep) {
+        prefetchStream(card, curVoice().id, seasonId, ep.id);
+    }
+}
 function playEpisode(ep) {
-var meta2 = baseMeta();
-meta2.episode = ep.id;
-meta2.hash = hashFor(meta2);
-buildSeasonPlaylist(card, meta2, episodes, function (playlist) { playMeta(meta2, playlist); });
+    var meta2 = baseMeta();
+    meta2.episode = ep.id;
+    meta2.hash = hashFor(meta2);
+
+    // ЭКСПЕРИМЕНТ: старт выбранной серии без ожидания всех серий
+    playMeta(meta2, null);
 }
 function playMovie() { playMeta(baseMeta(), null); }
 function enrichPoster() {
@@ -2135,8 +1924,18 @@ seasonId = tgt && tgt.season ? String(tgt.season) : '';
 lastEpId = tgt && tgt.episode ? String(tgt.episode) : '';
 if (!card.poster) enrichPoster();
 loadFranchisePosters();
-if (card.isSerial) loadEpisodes(function () { if (inited) render(); });
-else if (inited) render();
+if (card.isSerial) {
+    loadEpisodes(function () {
+        if (!inited) return;
+        prefetchTargetStream();
+        render();
+    });
+} else {
+    if (inited) {
+        prefetchTargetStream();
+        render();
+    }
+}
 }
 function loadCardHtml() {
 fetchFromMirrors(card.rel, acceptCard, function (html, mHost) {
