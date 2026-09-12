@@ -889,18 +889,6 @@ rezka: sanitizeMeta(meta)
 };
 Lampa.Player.runas('lampa');
 Lampa.Player.play(file);
-setTimeout(function () {
-    try {
-        var v = Lampa.PlayerVideo && Lampa.PlayerVideo.video
-            ? Lampa.PlayerVideo.video()
-            : null;
-
-        if (!v) {
-            console.log('[rezka-debug] no PlayerVideo.video');
-            return;
-        }
-
-        var src = v.currentSrc || v.src;
         
 setTimeout(function () {
     try {
