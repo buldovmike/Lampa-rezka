@@ -8,6 +8,73 @@ window.rezka_plugin_ready = true;
 var COMP_MAIN = 'rezka_main', COMP_LIST = 'rezka_list', COMP_CARD = 'rezka_card';
 function log() { try { console.log.apply(console, ['[rezka]'].concat([].slice.call(arguments))); } catch (e) {} }
 
+// === REZKA INNER TEST ===
+var rezkaInnerTest = {
+    armed: false,
+    timer: null,
+
+    arm: function () {
+        this.armed = true;
+
+        if (this.timer) clearTimeout(this.timer);
+
+        var self = this;
+        this.timer = setTimeout(function () {
+            self.armed = false;
+        }, 15000);
+    },
+
+    disarm: function () {
+        this.armed = false;
+
+        if (this.timer) clearTimeout(this.timer);
+        this.timer = null;
+    }
+};
+
+(function () {
+    if (window.__rezkaInnerPatchApplied) return;
+    window.__rezkaInnerPatchApplied = true;
+
+    try {
+        var P = null;
+
+        try {
+            if (window.Lampa && Lampa.Preroll) P = Lampa.Preroll;
+        } catch (e) {}
+
+        if (!P && window.Preroll) P = window.Preroll;
+
+        if (P && typeof P.show === 'function') {
+            var origShow = P.show;
+
+            P.show = function (data, cb) {
+                if (rezkaInnerTest.armed) {
+                    log('inner-test: bypass Preroll.show');
+
+                    rezkaInnerTest.disarm();
+
+                    if (typeof cb === 'function') {
+                        cb();
+                        return;
+                    }
+
+                    return;
+                }
+
+                return origShow.apply(this, arguments);
+            };
+
+            log('inner-test: Preroll.show patched');
+        } else {
+            log('inner-test: Lampa.Preroll not found');
+        }
+    } catch (e) {
+        log('inner-test patch error:', e && e.message);
+    }
+})();
+// === END REZKA INNER TEST ===
+
 window.__rezka_last_stream = '';
 
 function rezkaRawVideoTest(url) {
@@ -1062,15 +1129,26 @@ function playMetaWithQuality(meta, quality, playlist) {
         quality: quality,
         subtitles: [],
         isonline: true,
+        launch_player: 'lampa',
         hls_type: /\.m3u8(?:\?|$)/i.test(initial) ? 'native' : '',
         hash: meta.hash,
         timeline: Lampa.Timeline.view(meta.hash),
-        rezka: sanitizeMeta(meta),
-        change_quality: true
+        rezka: sanitizeMeta(meta)
     };
+
+    rezkaInnerTest.arm();
+
+    log('inner-test: before Lampa.Player.play', {
+        time: Date.now(),
+        url: initial
+    });
 
     Lampa.Player.runas('lampa');
     Lampa.Player.play(file);
+
+    log('inner-test: after Lampa.Player.play', {
+        time: Date.now()
+    });
 
     if (playlist && playlist.length > 1) {
         Lampa.Player.playlist(playlist);
@@ -1143,7 +1221,13 @@ function initPlayerHooks() {
     var watchingTimer = null;
     
     Lampa.Player.listener.follow('start', function (data) {
+        log('player start event', {
+            time: Date.now(),
+            url: data && data.url ? data.url : ''
+        });
+
         if (!data || !data.rezka) return;
+        
         var cur = data.rezka;
         histPush(cur);
         
