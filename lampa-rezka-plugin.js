@@ -1065,7 +1065,7 @@ function playMetaWithQuality(meta, quality, playlist) {
         hls_type: /\.m3u8(?:\?|$)/i.test(initial) ? 'native' : '',
         hash: meta.hash,
         timeline: Lampa.Timeline.view(meta.hash),
-        rezka: sanitizeMeta(meta)
+        rezka: sanitizeMeta(meta),
         change_quality: true
     };
 
