@@ -1063,6 +1063,7 @@ function playMetaWithQuality(meta, quality, playlist) {
         subtitles: [],
         isonline: true,
         hls_type: /\.m3u8(?:\?|$)/i.test(initial) ? 'native' : '',
+        launch_player: 'tvos'
         hash: meta.hash,
         timeline: Lampa.Timeline.view(meta.hash),
         rezka: sanitizeMeta(meta)
