@@ -681,6 +681,21 @@ if (single) map[/\.m3u8/.test(single[0]) ? 'AUTO' : '1080p'] = single[0];
 }
 return map;
 }
+function toDirectMp4Url(url) {
+    return String(url || '').replace(/:hls:manifest\.m3u8(\?|$)/i, '');
+}
+
+function qualityToDirectMp4(quality) {
+    var out = {};
+
+    for (var k in quality) {
+        var u = toDirectMp4Url(quality[k]);
+
+        if (u) out[k] = u;
+    }
+
+    return out;
+}
 function pickInitial(map) {
 var pref = stGet('quality', 'auto');
 if (map[pref]) return map[pref];
@@ -1013,6 +1028,13 @@ function percentOf(meta) {
 try { return Lampa.Timeline.view(hashFor(meta)).percent || 0; } catch (e) { return 0; }
 }
 function playMetaWithQuality(meta, quality, playlist) {
+    // TEMP EXPERIMENT: использовать прямой MP4 вместо псевдо-HLS
+    var directMp4Quality = qualityToDirectMp4(quality);
+
+    if (directMp4Quality && Object.keys(directMp4Quality).length) {
+    log('playMetaWithQuality: direct MP4 experiment enabled', directMp4Quality);
+    quality = directMp4Quality;
+    }
     var keys = Object.keys(quality);
 
     if (!keys.length) {
@@ -1040,7 +1062,7 @@ function playMetaWithQuality(meta, quality, playlist) {
         quality: quality,
         subtitles: [],
         isonline: true,
-        hls_type: 'native',
+        hls_type: /\.m3u8(?:\?|$)/i.test(initial) ? 'native' : '',
         hash: meta.hash,
         timeline: Lampa.Timeline.view(meta.hash),
         rezka: sanitizeMeta(meta)
