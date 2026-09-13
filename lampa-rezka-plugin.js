@@ -1219,6 +1219,38 @@ function buildSeasonPlaylist(card, baseMeta, episodes, cb) {
 }
 function initPlayerHooks() {
     var watchingTimer = null;
+
+    Lampa.Player.listener.follow('create', function (evt) {
+    if (!evt || !evt.data || !evt.data.rezka) return;
+
+    var d = evt.data;
+
+    d.launch_player = 'lampa';
+
+    // Попытка принудительно отключить возможные рекламные/преролл пути
+    d.preroll = false;
+    d.ad = false;
+    d.ads = false;
+    d.no_ads = true;
+    d.no_preroll = true;
+    d.disable_preroll = true;
+    d.hide_preroll = true;
+    d.skip_preroll = true;
+    d.skip_ads = true;
+
+    // На случай, если это связано с CUB/subscription
+    d.cub = false;
+    d.cub_ads = false;
+    d.cub_subscription = false;
+    d.subscription = false;
+    d.disable_subscription = true;
+
+    log('player create bypass', {
+        time: Date.now(),
+        url: d.url || '',
+        rezka: true
+        });
+    });
     
     Lampa.Player.listener.follow('start', function (data) {
         log('player start event', {
@@ -2199,6 +2231,60 @@ Lampa.Noty.show('Сохранено: ' + title);
 }
 });
 }
+
+// START PATCH-01
+function rezkaAdStorageProbe() {
+    var out = [];
+
+    try {
+        var re = /preroll|advert|ad|ads|cub|sub|banner|reklam|реклама|player|video/i;
+
+        for (var i = 0; i < localStorage.length; i++) {
+            var k = localStorage.key(i);
+
+            if (re.test(k)) {
+                out.push('localStorage ' + k + ' = ' + String(localStorage.getItem(k)).slice(0, 180));
+            }
+        }
+    } catch (e) {
+        out.push('localStorage error: ' + (e && e.message));
+    }
+
+    try {
+        if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function') {
+            var fields = [
+                'player',
+                'player_preroll',
+                'preroll',
+                'player_ads',
+                'ads',
+                'player_reklama',
+                'reklama',
+                'cub',
+                'cub_subscription',
+                'subscription',
+                'player_cub',
+                'cub_ads'
+            ];
+
+            fields.forEach(function (f) {
+                try {
+                    out.push('Storage ' + f + ' = ' + JSON.stringify(Lampa.Storage.get(f)));
+                } catch (e) {}
+            });
+        }
+    } catch (e) {
+        out.push('Lampa.Storage error: ' + (e && e.message));
+    }
+
+    log('ad-storage-probe', out);
+
+    try {
+        Lampa.Noty.show('Rezka: ad/cub storage probe в логах');
+    } catch (e) {}
+}
+// END PATCH-01
+    
 function registerSettings() {
 Lampa.SettingsApi.addComponent({
 component: 'rezka',
@@ -2278,6 +2364,21 @@ component: 'rezka',
 param: { name: 'rezka_clear_hist', type: 'button', default: '' },
 field: { name: 'Очистить историю плагина' },
 onChange: function () { stSet('history', []); Lampa.Noty.show('История Rezka очищена'); }
+});
+Lampa.SettingsApi.addParam({
+    component: 'rezka',
+    param: {
+        name: 'rezka_ad_probe_btn',
+        type: 'button',
+        default: ''
+    },
+    field: {
+        name: 'Диагностика рекламы/CUB',
+        description: 'Ищет в хранилище ключи рекламы, преролла и подписки'
+    },
+    onChange: function () {
+        rezkaAdStorageProbe();
+    }
 });
 Lampa.SettingsApi.addParam({
     component: 'rezka',
