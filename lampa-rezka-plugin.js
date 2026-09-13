@@ -180,6 +180,166 @@ function rezkaRawVideoTest(url) {
     }
 }
 
+function rezkaPlayerMode() {
+    try {
+        return Lampa.Storage.get('rezka_player_mode', 'lampa');
+    } catch (e) {
+        return 'lampa';
+    }
+}
+
+function rezkaDirectClose() {
+    try {
+        if (window.__rezka_direct_wrap) {
+            window.__rezka_direct_wrap.remove();
+            window.__rezka_direct_wrap = null;
+        }
+    } catch (e) {}
+
+    try {
+        if (window.__rezka_direct_keydown) {
+            document.removeEventListener('keydown', window.__rezka_direct_keydown, true);
+            window.__rezka_direct_keydown = null;
+        }
+    } catch (e) {}
+}
+
+function rezkaTimelineSave(hash, v) {
+    if (!hash || !v || !v.duration) return;
+
+    var percent = Math.floor((v.currentTime / v.duration) * 100);
+
+    var obj = {
+        percent: percent,
+        time: v.currentTime,
+        duration: v.duration
+    };
+
+    try {
+        if (window.Lampa && Lampa.Timeline && typeof Lampa.Timeline.update === 'function') {
+            Lampa.Timeline.update(hash, obj);
+            return;
+        }
+    } catch (e) {}
+
+    try {
+        Lampa.Storage.set('rezka_timeline_' + hash, obj);
+    } catch (e) {}
+}
+
+function rezkaTimelineGetTime(hash) {
+    if (!hash) return 0;
+
+    try {
+        var t = Lampa.Timeline.view(hash);
+
+        if (t && t.time) return t.time;
+    } catch (e) {}
+
+    try {
+        var saved = Lampa.Storage.get('rezka_timeline_' + hash, null);
+
+        if (saved && saved.time) return saved.time;
+    } catch (e) {}
+
+    return 0;
+}
+
+function rezkaDirectPlay(url, meta) {
+    if (!url) {
+        Lampa.Noty.show('Rezka Direct: нет URL потока');
+        return;
+    }
+
+    rezkaDirectClose();
+
+    var hash = meta && meta.hash ? meta.hash : '';
+    var savedTime = rezkaTimelineGetTime(hash);
+
+    var $wrap = $('<div style="position:fixed;left:0;top:0;width:100%;height:100%;background:#000;z-index:2147483647;"></div>');
+    var v = document.createElement('video');
+
+    v.style.width = '100%';
+    v.style.height = '100%';
+
+    v.setAttribute('playsinline', '');
+    v.setAttribute('webkit-playsinline', '');
+
+    v.preload = 'auto';
+    v.muted = false;
+
+    $wrap.append(v);
+    $('body').append($wrap);
+
+    window.__rezka_direct_wrap = $wrap;
+
+    function close() {
+        try {
+            rezkaTimelineSave(hash, v);
+        } catch (e) {}
+
+        rezkaDirectClose();
+
+        try {
+            Lampa.Controller.toggle('content');
+        } catch (e) {}
+    }
+
+    var keyHandler = function (e) {
+        var k = e.keyCode;
+
+        // Back / Escape / common TV back codes
+        if (k === 8 || k === 27 || k === 461 || k === 10009) {
+            try {
+                e.preventDefault();
+                e.stopPropagation();
+            } catch (e2) {}
+
+            close();
+        }
+    };
+
+    document.addEventListener('keydown', keyHandler, true);
+    window.__rezka_direct_keydown = keyHandler;
+
+    v.addEventListener('loadedmetadata', function () {
+        if (savedTime > 0 && savedTime < ((v.duration || 0) - 10)) {
+            try {
+                v.currentTime = savedTime;
+                log('direct play: resume from', savedTime);
+            } catch (e) {}
+        }
+    });
+
+    v.addEventListener('timeupdate', function () {
+        rezkaTimelineSave(hash, v);
+    });
+
+    v.addEventListener('ended', function () {
+        rezkaTimelineSave(hash, v);
+        close();
+    });
+
+    v.src = url;
+    v.load();
+
+    var p = v.play();
+
+    if (p && typeof p.catch === 'function') {
+        p.catch(function (err) {
+            log('direct play error:', err && err.name, err && err.message);
+
+            Lampa.Noty.show('Rezka Direct: ' + (err && err.name ? err.name : 'play error'));
+        });
+    }
+
+    log('direct play started', {
+        url: url,
+        hash: hash,
+        savedTime: savedTime
+    });
+}
+
 (function () {
 try {
 var origStringify = JSON.stringify;
@@ -1095,13 +1255,19 @@ function percentOf(meta) {
 try { return Lampa.Timeline.view(hashFor(meta)).percent || 0; } catch (e) { return 0; }
 }
 function playMetaWithQuality(meta, quality, playlist) {
-    // TEMP EXPERIMENT: использовать прямой MP4 вместо псевдо-HLS
-    var directMp4Quality = qualityToDirectMp4(quality);
+    var playerMode = rezkaPlayerMode();
 
-    if (directMp4Quality && Object.keys(directMp4Quality).length) {
-    log('playMetaWithQuality: direct MP4 experiment enabled', directMp4Quality);
-    quality = directMp4Quality;
+    // MP4-эксперимент оставляем только для Lampa-пути.
+    // Для direct-пути лучше использовать исходный поток, который уже доказанно работает.
+    if (playerMode !== 'direct') {
+        var directMp4Quality = qualityToDirectMp4(quality);
+
+        if (directMp4Quality && Object.keys(directMp4Quality).length) {
+            log('playMetaWithQuality: direct MP4 experiment enabled', directMp4Quality);
+            quality = directMp4Quality;
+        }
     }
+
     var keys = Object.keys(quality);
 
     if (!keys.length) {
@@ -1120,8 +1286,15 @@ function playMetaWithQuality(meta, quality, playlist) {
         url: initial,
         season: meta.season,
         episode: meta.episode,
-        voice: meta.voice_id
+        voice: meta.voice_id,
+        mode: playerMode
     });
+
+    if (playerMode === 'direct') {
+        log('playMetaWithQuality: direct mode');
+        rezkaDirectPlay(initial, meta);
+        return;
+    }
 
     var file = {
         title: meta.title + (meta.season ? ' (S' + meta.season + ' E' + meta.episode + ')' : '') + ' · ' + qlabel,
@@ -1129,26 +1302,14 @@ function playMetaWithQuality(meta, quality, playlist) {
         quality: quality,
         subtitles: [],
         isonline: true,
-        launch_player: 'lampa',
         hls_type: /\.m3u8(?:\?|$)/i.test(initial) ? 'native' : '',
         hash: meta.hash,
         timeline: Lampa.Timeline.view(meta.hash),
         rezka: sanitizeMeta(meta)
     };
 
-    rezkaInnerTest.arm();
-
-    log('inner-test: before Lampa.Player.play', {
-        time: Date.now(),
-        url: initial
-    });
-
     Lampa.Player.runas('lampa');
     Lampa.Player.play(file);
-
-    log('inner-test: after Lampa.Player.play', {
-        time: Date.now()
-    });
 
     if (playlist && playlist.length > 1) {
         Lampa.Player.playlist(playlist);
@@ -2378,6 +2539,27 @@ Lampa.SettingsApi.addParam({
     },
     onChange: function () {
         rezkaAdStorageProbe();
+    }
+});
+Lampa.SettingsApi.addParam({
+    component: 'rezka',
+    param: {
+        name: 'rezka_player_mode',
+        type: 'select',
+        values: {
+            lampa: 'Lampa player',
+            direct: 'Rezka Direct (эксперимент)'
+        },
+        default: 'lampa'
+    },
+    field: {
+        name: 'Плеер для Rezka',
+        description: 'Lampa = встроенный плеер; Direct = прямой <video> без внутреннего запуска'
+    },
+    onChange: function (v) {
+        try {
+            Lampa.Storage.set('rezka_player_mode', v);
+        } catch (e) {}
     }
 });
 Lampa.SettingsApi.addParam({
