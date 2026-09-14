@@ -402,7 +402,7 @@ return /dle_user_id=|dle_password=|dle_user_token=|user_hash=/.test(jarGet(host 
 
 function request(rel, options, onDone, onFail, _retry) {
     options = options || {};
-
+    var mode = transportMode();
     var method = options.method || 'GET';
     var body = options.form ? encodeForm(options.form) : null;
 
