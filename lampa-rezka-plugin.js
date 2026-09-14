@@ -2402,7 +2402,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '4.17.0',
+version: '5.0.0',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
