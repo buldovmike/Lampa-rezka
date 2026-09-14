@@ -2109,7 +2109,7 @@ function registerSettings() {
 
     textParam('rezka_mirrors', 'Каскад зеркал для карточек', 'Через запятую: https://rezka.fi,https://rezka.ag,https://hdrezka.ag', {
         set: function (v) {
-            stSet('mirrors', v);
+            stSet('mirrors', v || 'https://rezka.fi,https://rezka.ag,https://hdrezka.ag');
         }
     });
 
