@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v4.17.0
+HDREZKA for Lampa/Luxo — v5.0.0
 */
 (function () {
 'use strict';
@@ -295,9 +295,7 @@ if (p.slice(-1) !== '/') p += '/';
 return p;
 }
 function transportMode() {
-var t = stGet('transport', 'auto');
-if (t === 'proxy' || t === 'direct') return t;
-return proxyUrl() ? 'proxy' : 'direct';
+return 'proxy';
 }
 function encodeForm(o) {
 var p = [];
@@ -403,28 +401,37 @@ return /dle_user_id=|dle_password=|dle_user_token=|user_hash=/.test(jarGet(host 
 }
 
 function request(rel, options, onDone, onFail, _retry) {
-options = options || {};
-var method = options.method || 'GET';
-var body = options.form ? encodeForm(options.form) : null;
-var mode = transportMode();
-var base = options.mirror || mirror();
-var host = hostOf(base);
-var url, headers = {};
-if (mode === 'proxy') {
-url = proxyUrl() + '?r=' + encodeURIComponent(rel) + '&m=' + encodeURIComponent(base);
-headers['X-Rezka-Cookie'] = jarGet(host);
-if (options.referer) headers['X-Rezka-Referer'] = options.referer;
-if (body) headers['Content-Type'] = 'application/x-www-form-urlencoded';
-} else {
-url = base + rel;
-if (options.referer) headers['Referer'] = options.referer;
-if (body) headers['Content-Type'] = 'application/x-www-form-urlencoded';
-}
-if (options.ajax) headers['X-Requested-With'] = 'XMLHttpRequest';
-fetch(url, {
-method: method, headers: headers, body: body,
-credentials: mode === 'proxy' ? 'omit' : 'include'
-})
+    options = options || {};
+
+    var method = options.method || 'GET';
+    var body = options.form ? encodeForm(options.form) : null;
+
+    var purl = proxyUrl();
+
+    if (!purl) {
+        onFail(new Error('Rezka: не задан адрес прокси. Настройки → HDREZKA → Прокси.'));
+        return;
+    }
+
+    var base = options.mirror || mirror();
+    var host = hostOf(base);
+
+    var url = purl + '?r=' + encodeURIComponent(rel) + '&m=' + encodeURIComponent(base);
+
+    var headers = {};
+
+    headers['X-Rezka-Cookie'] = jarGet(host);
+
+    if (options.referer) headers['X-Rezka-Referer'] = options.referer;
+    if (body) headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    if (options.ajax) headers['X-Requested-With'] = 'XMLHttpRequest';
+
+    fetch(url, {
+        method: method,
+        headers: headers,
+        body: body,
+        credentials: 'omit'
+    })
 .then(function (r) {
 var sc = '';
 try { sc = r.headers.get('x-rezka-set-cookie') || ''; } catch (e) {}
@@ -2082,156 +2089,205 @@ Lampa.Noty.show('Сохранено: ' + title);
 }
    
 function registerSettings() {
-Lampa.SettingsApi.addComponent({
-component: 'rezka',
-name: 'HDREZKA',
-icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 6.5 6 3.5-6 3.5v-7z"/></svg>'
-});
-textParam('rezka_proxy', 'Прокси (Worker / локальный)', 'Адрес прокси: http://IP-ПК:8787 или https://xxx.workers.dev', { set: function (v) { stSet('proxy', v); } });
-textParam('rezka_mirror', 'Основное зеркало', 'Зеркало авторизованных разделов: https://rezka.fi', { set: function (v) { stSet('mirror', v || 'https://rezka.fi'); } });
-textParam('rezka_mirrors', 'Каскад зеркал для карточек', 'Через запятую: https://rezka.fi,https://rezka.ag,https://hdrezka.ag', { set: function (v) { stSet('mirrors', v); } });
-textParam('rezka_email', 'Email / логин rezka', 'От вашего аккаунта rezka', { set: function (v) { stSet('email', v); } });
-textParam('rezka_password_ui', 'Пароль rezka', 'Хранится локально; редактор открывается пустым',
-{ mask: true, get: function () { return stGet('password', ''); }, set: function (v) { stSet('password', v); } });
-textParam('rezka_cookies_ui', 'Cookies вручную (для основного зеркала)',
-'ПОЛНАЯ строка cookie из браузера; пишется в jar зеркала rezka.fi',
-{
-mask: true,
-get: function () { return jarGet(hostOf(mirror())); },
-set: function (v) { jarSetHost(hostOf(mirror()), v); }
-});
-Lampa.SettingsApi.addParam({
-component: 'rezka',
-param: { name: 'rezka_transport', type: 'select', values: { auto: 'Авто', proxy: 'Прокси', direct: 'Напрямую' }, default: 'auto' },
-field: { name: 'Режим запросов', description: 'Авто = прокси, если адрес задан' },
-onChange: function (v) { stSet('transport', v); }
-});
-Lampa.SettingsApi.addParam({
-component: 'rezka',
-param: { name: 'rezka_quality_sel', type: 'select', values: { auto: 'Авто (максимальное)', '1080p': '1080p', '720p': '720p', '480p': '480p', '360p': '360p' }, default: 'auto' },
-field: { name: 'Стартовое качество', description: 'С какого качества начинать; метка видна в заголовке плеера' },
-onChange: function (v) { stSet('quality', v); }
-});
-Lampa.SettingsApi.addParam({
-component: 'rezka',
-param: { name: 'rezka_login_btn', type: 'button', default: '' },
-field: { name: 'Войти на rezka', description: 'Пробует вход по каскаду зеркал' },
-onChange: function () {
-Lampa.Noty.show('Rezka: вход… (' + transportMode() + ')');
-apiLogin(function (ok, err) {
-Lampa.Noty.show(ok ? 'Rezka: вход выполнен' : ('Rezka: ' + err), ok ? {} : { style: 'error' });
-try { Lampa.Settings.update(); } catch (e) {}
-});
-}
-});
-Lampa.SettingsApi.addParam({
-component: 'rezka',
-param: { name: 'rezka_diag_btn', type: 'button', default: '' },
-field: { name: 'Диагностика', description: 'Показывает jars по хостам и транспорт' },
-onChange: function () {
-var o = jarStore(), parts = [];
-for (var k in o) parts.push(k + ':' + (o[k] || '').length);
-Lampa.Noty.show('транспорт ' + transportMode() + ', jars: ' + (parts.join(', ') || 'пусто') +
-', auth fi: ' + (jarHasAuth() ? 'да' : 'нет'));
-}
-});
-Lampa.SettingsApi.addParam({
-component: 'rezka',
-param: { name: 'rezka_test_btn', type: 'button', default: '' },
-field: { name: 'Тест соединения', description: 'Запрос главной rezka через текущий транспорт' },
-onChange: function () {
-Lampa.Noty.show('Rezka: проверка… (' + transportMode() + ')');
-getText('/', { method: 'GET' }, function (text, res) {
-var okHtml = /b-content__inline|<html/i.test(text || '');
-Lampa.Noty.show('Rezka: HTTP ' + (res ? res.status : '?') +
-(okHtml ? ', HTML похож на rezka' : ', ответ: ' + snippet(text, 60)) +
-(jarHasAuth() ? ', авторизация есть' : ', без авторизации'));
-}, function (e) { Lampa.Noty.show('Rezka: ' + e.message, { style: 'error' }); });
-}
-});
-Lampa.SettingsApi.addParam({
-component: 'rezka',
-param: { name: 'rezka_sync', type: 'trigger', default: false },
-field: { name: 'Синхронизация истории с rezka', description: 'Экспериментально: ajax/send_watching' },
-onChange: function (v) { stSet('sync', v ? 'true' : ''); }
-});
-Lampa.SettingsApi.addParam({
-component: 'rezka',
-param: { name: 'rezka_clear_hist', type: 'button', default: '' },
-field: { name: 'Очистить историю плагина' },
-onChange: function () { stSet('history', []); Lampa.Noty.show('История Rezka очищена'); }
-});
-Lampa.SettingsApi.addParam({
+    Lampa.SettingsApi.addComponent({
+        component: 'rezka',
+        name: 'HDREZKA',
+        icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 6.5 6 3.5-6 3.5v-7z"/></svg>'
+    });
+
+    textParam('rezka_proxy', 'Прокси (локальный)', 'Адрес прокси: http://IP-роутера:8787', {
+        set: function (v) {
+            stSet('proxy', v);
+        }
+    });
+
+    textParam('rezka_mirror', 'Основное зеркало', 'Зеркало авторизованных разделов: https://rezka.fi', {
+        set: function (v) {
+            stSet('mirror', v || 'https://rezka.fi');
+        }
+    });
+
+    textParam('rezka_mirrors', 'Каскад зеркал для карточек', 'Через запятую: https://rezka.fi,https://rezka.ag,https://hdrezka.ag', {
+        set: function (v) {
+            stSet('mirrors', v);
+        }
+    });
+
+    textParam('rezka_email', 'Email / логин rezka', 'От вашего аккаунта rezka', {
+        set: function (v) {
+            stSet('email', v);
+        }
+    });
+
+    textParam('rezka_password_ui', 'Пароль rezka', 'Хранится локально', {
+        mask: true,
+        get: function () {
+            return stGet('password', '');
+        },
+        set: function (v) {
+            stSet('password', v);
+        }
+    });
+
+    textParam('rezka_cookies_ui', 'Cookies вручную (для основного зеркала)', 'ПОЛНАЯ строка cookie из браузера; пишется в jar зеркала', {
+        mask: true,
+        get: function () {
+            return jarGet(hostOf(mirror()));
+        },
+        set: function (v) {
+            jarSetHost(hostOf(mirror()), v);
+        }
+    });
+
+    Lampa.SettingsApi.addParam({
+        component: 'rezka',
+        param: {
+            name: 'rezka_quality_sel',
+            type: 'select',
+            values: {
+                auto: 'Авто (максимальное)',
+                '1080p': '1080p',
+                '720p': '720p',
+                '480p': '480p',
+                '360p': '360p'
+            },
+            default: 'auto'
+        },
+        field: {
+            name: 'Стартовое качество',
+            description: 'С какого качества начинать воспроизведение'
+        },
+        onChange: function (v) {
+            stSet('quality', v);
+        }
+    });
+
+    Lampa.SettingsApi.addParam({
+        component: 'rezka',
+        param: {
+            name: 'rezka_login_btn',
+            type: 'button',
+            default: ''
+        },
+        field: {
+            name: 'Войти на rezka',
+            description: 'Пробует вход по каскаду зеркал'
+        },
+        onChange: function () {
+            Lampa.Noty.show('Rezka: вход… (' + transportMode() + ')');
+
+            apiLogin(function (ok, err) {
+                Lampa.Noty.show(
+                    ok ? 'Rezka: вход выполнен' : ('Rezka: ' + err),
+                    ok ? {} : { style: 'error' }
+                );
+
+                try {
+                    Lampa.Settings.update();
+                } catch (e) {}
+            });
+        }
+    });
+
+    Lampa.SettingsApi.addParam({
     component: 'rezka',
     param: {
-        name: 'rezka_ad_probe_btn',
+        name: 'rezka_check_btn',
         type: 'button',
         default: ''
     },
     field: {
-        name: 'Диагностика рекламы/CUB',
-        description: 'Ищет в хранилище ключи рекламы, преролла и подписки'
+        name: 'Проверка прокси',
+        description: 'Проверяет доступ к rezka через указанный прокси'
     },
     onChange: function () {
-        rezkaAdStorageProbe();
+        var p = proxyUrl();
+
+        if (!p) {
+            Lampa.Noty.show('Rezka: не задан адрес прокси', { style: 'error' });
+            return;
+        }
+
+        Lampa.Noty.show('Rezka: проверка прокси…');
+
+        request('/', {
+            method: 'GET',
+            _nologin: true
+        }, function (res) {
+            var text = res.text || '';
+            var looksLikeRezka = /b-content__inline|<html/i.test(text);
+
+            log('proxy-check', {
+                proxy: p,
+                status: res.status,
+                length: text.length,
+                looksLikeRezka: looksLikeRezka,
+                auth: jarHasAuth()
+            });
+
+            Lampa.Noty.show(
+                'Rezka: HTTP ' + res.status +
+                (looksLikeRezka ? ', страница похожа на rezka' : ', ответ не похож на rezka') +
+                ', авторизация: ' + (jarHasAuth() ? 'есть' : 'нет')
+            );
+        }, function (e) {
+            log('proxy-check error:', e && e.message);
+
+            Lampa.Noty.show('Rezka: ' + (e && e.message ? e.message : 'ошибка проверки'), {
+                style: 'error'
+            });
+        });
     }
 });
-Lampa.SettingsApi.addParam({
+
+    Lampa.SettingsApi.addParam({
     component: 'rezka',
     param: {
-        name: 'rezka_player_mode',
-        type: 'select',
-        values: {
-            lampa: 'Lampa player',
-            direct: 'Rezka Direct (эксперимент)'
-        },
-        default: 'lampa'
+        name: 'rezka_clear_auth',
+        type: 'button',
+        default: ''
     },
     field: {
-        name: 'Плеер для Rezka',
-        description: 'Lampa = встроенный плеер; Direct = прямой <video> без внутреннего запуска'
+        name: 'Очистить данные входа',
+        description: 'Удаляет email, пароль и сохранённые cookies rezka'
     },
-    onChange: function (v) {
+    onChange: function () {
         try {
-            Lampa.Storage.set('rezka_player_mode', v);
+            stSet('email', '');
+            stSet('password', '');
+            stSet('cookies', '');
+            stSet('jars', '{}');
+        } catch (e) {}
+
+        try {
+            Lampa.Storage.set('rezka_password_ui', '');
+        } catch (e) {}
+
+        log('auth data cleared');
+
+        Lampa.Noty.show('Rezka: данные входа очищены');
+
+        try {
+            Lampa.Settings.update();
         } catch (e) {}
     }
 });
-Lampa.SettingsApi.addParam({
-    component: 'rezka',
-    param: {
-        name: 'rezka_raw_test_m3u8',
-        type: 'button',
-        default: ''
-    },
-    field: {
-        name: 'Raw test: последний .m3u8',
-        description: 'Создаёт чистый <video> и пытается сыграть последний Rezka stream'
-    },
-    onChange: function () {
-        rezkaRawVideoTest(window.__rezka_last_stream || '');
-    }
-});
 
-Lampa.SettingsApi.addParam({
-    component: 'rezka',
-    param: {
-        name: 'rezka_raw_test_mp4',
-        type: 'button',
-        default: ''
-    },
-    field: {
-        name: 'Raw test: последний .mp4',
-        description: 'Пробует прямой .mp4 вместо .mp4:hls:manifest.m3u8'
-    },
-    onChange: function () {
-        var u = window.__rezka_last_stream || '';
-
-        u = String(u).replace(/:hls:manifest\.m3u8(\?|$)/i, '');
-
-        rezkaRawVideoTest(u);
-    }
-});
+    Lampa.SettingsApi.addParam({
+        component: 'rezka',
+        param: {
+            name: 'rezka_clear_hist',
+            type: 'button',
+            default: ''
+        },
+        field: {
+            name: 'Очистить историю плагина'
+        },
+        onChange: function () {
+            stSet('history', []);
+            Lampa.Noty.show('История Rezka очищена');
+        }
+    });
 }
 
 function addCss() {
