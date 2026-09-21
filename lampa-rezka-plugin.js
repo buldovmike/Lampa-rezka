@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v5.1.0
+HDREZKA for Lampa/Luxo — v5.2.0
 */
 (function () {
 'use strict';
@@ -23,12 +23,12 @@ function rezkaDirectClose() {
 }
 
 function rezkaDirectEnsureCss() {
-    var oldIds = ['rezka-direct-css', 'rezka-direct-css-v2'];
+    var oldIds = ['rezka-direct-css', 'rezka-direct-css-v2', 'rezka-direct-css-v3'];
     for (var oi = 0; oi < oldIds.length; oi++) {
         var oldEl = document.getElementById(oldIds[oi]);
         if (oldEl && oldEl.parentNode) oldEl.parentNode.removeChild(oldEl);
     }
-    if (document.getElementById('rezka-direct-css-v3')) return;
+    if (document.getElementById('rezka-direct-css-v4')) return;
 
     var css = '' +
         '.rezka-direct{position:fixed;left:0;top:0;width:100%;height:100%;background:#000;z-index:2147483647;font-family:-apple-system,"SF Pro Rounded","SF Pro Display",system-ui,"Segoe UI",Roboto,sans-serif;}' +
@@ -46,6 +46,7 @@ function rezkaDirectEnsureCss() {
         '.rd-btn{display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center;gap:10px;height:56px;padding:0 26px;border-radius:999px;background:rgba(255,255,255,.10);color:#fff;font-size:24px;font-weight:600;-webkit-transition:transform .15s,background .15s,box-shadow .15s;transition:transform .15s,background .15s,box-shadow .15s;}' +
         '.rd-btn svg{width:30px;height:30px;fill:#fff;}' +
         '.rd-btn.focus{background:rgba(255,255,255,.22);box-shadow:0 0 0 3px #fff,0 10px 34px rgba(0,0,0,.5);-webkit-transform:scale(1.05);transform:scale(1.05);}' +
+        '.rd-btn--right{margin-left:auto;}' +
         '.rd-btn--play{width:88px;height:88px;padding:0;border-radius:50%;background:linear-gradient(135deg,#ff2d78,#ff6aa0);box-shadow:0 12px 40px rgba(255,45,120,.45);}' +
         '.rd-btn--play svg{width:42px;height:42px;}' +
         '.rd-btn--play.focus{box-shadow:0 0 0 4px #fff,0 12px 44px rgba(255,45,120,.55);}' +
@@ -59,9 +60,9 @@ function rezkaDirectEnsureCss() {
         '.rd-cursor{position:absolute;top:50%;left:0;width:24px;height:24px;border-radius:50%;background:#fff;-webkit-transform:translate(-50%,-50%);transform:translate(-50%,-50%);box-shadow:0 0 0 5px rgba(255,255,255,.25),0 4px 14px rgba(0,0,0,.5);opacity:0;-webkit-transition:opacity .15s;transition:opacity .15s;pointer-events:none;}' +
         '.rd-cursor.visible{opacity:1;}' +
 
-        '.rd-preview{position:absolute;bottom:calc(100% + 20px);left:0;-webkit-transform:translateX(-50%);transform:translateX(-50%);width:212px;border-radius:16px;overflow:hidden;background:rgba(10,10,14,.72);box-shadow:0 14px 44px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.14);display:none;pointer-events:none;}' +
+        '.rd-preview{position:absolute;bottom:calc(100% + 20px);left:0;-webkit-transform:translateX(-50%);transform:translateX(-50%);width:212px;border-radius:16px;overflow:hidden;background:rgba(10,10,14,.55);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:0 14px 44px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.14);display:none;pointer-events:none;}' +
         '.rd-preview.visible{display:block;}' +
-        '.rd-preview canvas{display:block;width:212px;height:120px;background:#111;}' +
+        '.rd-preview canvas{display:block;width:212px;height:120px;background:transparent;}' +
         '.rd-preview__time{padding:6px 0 8px;text-align:center;font-size:22px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums;}' +
 
         '.rezka-direct-center{position:absolute;left:50%;top:50%;-webkit-transform:translate(-50%,-50%);transform:translate(-50%,-50%);text-align:center;color:#fff;opacity:0;-webkit-transition:opacity .2s;transition:opacity .2s;pointer-events:none;}' +
@@ -82,8 +83,8 @@ function rezkaDirectEnsureCss() {
         '.rezka-direct-hint{position:absolute;bottom:calc(4vh + 240px);left:0;right:0;text-align:center;color:#ffd76a;font-size:24px;font-weight:600;text-shadow:0 1px 4px #000;opacity:0;-webkit-transition:opacity .2s;transition:opacity .2s;pointer-events:none;}' +
         '.rezka-direct-hint.visible{opacity:1;}' +
 
-        '.rd-modal{position:absolute;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,.55);display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center;}' +
-        '.rd-modal__box{min-width:440px;max-width:70vw;max-height:70vh;overflow:hidden;background:rgba(18,18,24,.72);-webkit-backdrop-filter:blur(34px);backdrop-filter:blur(34px);border-radius:26px;padding:30px 34px;box-shadow:0 24px 80px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.12);}' +
+        '.rd-modal{position:absolute;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,.35);display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center;}' +
+        '.rd-modal__box{min-width:440px;max-width:70vw;max-height:70vh;overflow:hidden;background:rgba(18,18,24,.55);-webkit-backdrop-filter:blur(40px) saturate(1.4);backdrop-filter:blur(40px) saturate(1.4);border-radius:26px;padding:30px 34px;box-shadow:0 24px 80px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.14);}' +
         '.rd-modal__title{font-size:30px;font-weight:700;color:#fff;margin-bottom:18px;}' +
         '.rd-modal__item{padding:14px 24px;border-radius:16px;font-size:26px;font-weight:600;color:rgba(255,255,255,.85);margin-bottom:8px;}' +
         '.rd-modal__item.focus{background:rgba(255,255,255,.18);color:#fff;box-shadow:0 0 0 3px #fff;}' +
@@ -92,7 +93,7 @@ function rezkaDirectEnsureCss() {
         '@keyframes rezka-spin{to{-webkit-transform:rotate(360deg);transform:rotate(360deg)}}';
 
     var st = document.createElement('style');
-    st.id = 'rezka-direct-css-v3';
+    st.id = 'rezka-direct-css-v4';
 
     try {
         st.appendChild(document.createTextNode(css));
@@ -226,6 +227,8 @@ function rezkaDirectPlay(url, meta) {
 
     // быстрая перемотка при скрытых контролах
     var shortSeekCount = 0, shortSeekAt = 0;
+    var lastSelectAt = 0, lastPpAt = 0;
+    var pvReady = false, pvDrawOk = false, pvSeeking = false, pvFailTimer = null;
 
     // превью-кадры
     var pvVideo = null, pvCtx = null, pvTimer = null, pvWantMeta = false, pvEnabled = true;
@@ -268,7 +271,7 @@ function rezkaDirectPlay(url, meta) {
 
     var $qBtn = null;
     if (Object.keys(qMap).length > 0) {
-        $qBtn = $('<div class="rd-btn"></div>');
+        $qBtn = $('<div class="rd-btn rd-btn--right"></div>');
         $qBtn.html(ICON_QUAL + '<span></span>');
         $qBtn.find('span').text(qLabel || 'Качество');
         btns.push({ el: $qBtn, act: 'quality' });
@@ -347,6 +350,13 @@ function rezkaDirectPlay(url, meta) {
             uiTimer = setTimeout(hideControls, 4000);
         }
     }
+    function maybeAutoHide() {
+        if (closed || !controlsOn) return;
+        if (uiTimer) { clearTimeout(uiTimer); uiTimer = null; }
+        if (started && !v.paused && !loading && focusZone !== 'timeline' && !modalOpen) {
+            uiTimer = setTimeout(hideControls, 4000);
+        }
+    }
     function hideControls() {
         if (closed || !v || v.paused || loading || modalOpen) return;
         if (focusZone === 'timeline' || cursorMoved) return;
@@ -418,6 +428,7 @@ function rezkaDirectPlay(url, meta) {
             pvVideo.style.opacity = '0';
             pvVideo.style.left = '-10px';
             pvVideo.addEventListener('loadedmetadata', onPvMeta);
+            pvVideo.addEventListener('canplay', onPvCanPlay);
             pvVideo.addEventListener('seeked', onPvSeeked);
             pvVideo.addEventListener('error', onPvError);
             pvVideo.src = currentUrl;
@@ -427,41 +438,63 @@ function rezkaDirectPlay(url, meta) {
             pvVideo = null;
         }
     }
+    function doPvSeek(t) {
+        if (!pvVideo) return;
+        if (!pvReady) { pvWantMeta = true; return; }
+        pvSeeking = true;
+        try { pvVideo.currentTime = t; } catch (e) { pvSeeking = false; }
+    }
     function onPvMeta() {
+        pvReady = true;
         if (pvWantMeta && pvVideo) {
             pvWantMeta = false;
-            try { pvVideo.currentTime = cursorTime; } catch (e) {}
+            doPvSeek(cursorTime);
         }
     }
+    function onPvCanPlay() {
+        if (pvSeeking) tryDraw();
+    }
     function onPvSeeked() {
+        tryDraw();
+    }
+    function tryDraw() {
         if (!pvVideo || !pvCtx) return;
         try {
+            if (pvVideo.readyState < 2) return;
             pvCtx.drawImage(pvVideo, 0, 0, 212, 120);
+            pvDrawOk = true;
+            pvSeeking = false;
             $preview.addClass('visible');
+            if (pvFailTimer) { clearTimeout(pvFailTimer); pvFailTimer = null; }
         } catch (e) {
             pvEnabled = false;
-            $preview.removeClass('visible');
+            hidePreview();
         }
     }
     function onPvError() {
         pvEnabled = false;
-        $preview.removeClass('visible');
+        hidePreview();
     }
     function schedulePreview(t) {
         if (!pvEnabled) return;
         var d = getDuration();
         $pvTime.text(fmt(t));
         if (d > 0) $preview.css('left', clamp((t / d) * 100, 0, 100) + '%');
-        $preview.addClass('visible');
+        if (pvDrawOk) $preview.addClass('visible');
         if (pvTimer) clearTimeout(pvTimer);
         pvTimer = setTimeout(function () {
             if (closed) return;
             ensurePreview();
-            if (!pvVideo) return;
-            try {
-                if (pvVideo.readyState >= 1) pvVideo.currentTime = t;
-                else pvWantMeta = true;
-            } catch (e) {}
+            doPvSeek(t);
+            if (!pvFailTimer && !pvDrawOk) {
+                pvFailTimer = setTimeout(function () {
+                    if (!pvDrawOk) {
+                        pvEnabled = false;
+                        hidePreview();
+                        log('preview: disabled (no decodable frame)');
+                    }
+                }, 3000);
+            }
         }, 260);
     }
     function hidePreview() {
@@ -470,9 +503,15 @@ function rezkaDirectPlay(url, meta) {
     }
     function destroyPreview() {
         hidePreview();
+        if (pvFailTimer) { clearTimeout(pvFailTimer); pvFailTimer = null; }
+        pvReady = false;
+        pvDrawOk = false;
+        pvSeeking = false;
+        pvWantMeta = false;
         if (pvVideo) {
             try {
                 pvVideo.removeEventListener('loadedmetadata', onPvMeta);
+                pvVideo.removeEventListener('canplay', onPvCanPlay);
                 pvVideo.removeEventListener('seeked', onPvSeeked);
                 pvVideo.removeEventListener('error', onPvError);
                 pvVideo.pause();
@@ -552,7 +591,7 @@ function rezkaDirectPlay(url, meta) {
         var now = Date.now();
         curBurstCount = (now - curBurstAt <= 700) ? curBurstCount + 1 : 1;
         curBurstAt = now;
-        var base = Math.max(5, d * 0.005);
+        var base = Math.max(10, d * 0.005);
         var mult = Math.min(curBurstCount, 12);
         var step = Math.min(d * 0.05, base * mult);
         cursorTime = clamp(cursorTime + dir * step, 0, Math.max(0, d - 0.25));
@@ -560,6 +599,41 @@ function rezkaDirectPlay(url, meta) {
         updateTimeline();
         schedulePreview(cursorTime);
         showControls(false);
+    }
+    function fineStepSec(mag) { return clamp(mag * 0.02, 0.5, 6); }
+    function fineSeek(dir, mag) {
+        if (!canSeek()) return;
+        var d = getDuration(), c = curTime();
+        var step = fineStepSec(mag);
+        var target = clamp(c + dir * step, 0, Math.max(0, d - 0.25));
+        try { v.currentTime = target; } catch (e) {}
+        showSide(dir, dir * step, target);
+        updateTimeline();
+        saveTimeline(false);
+        refreshCenter();
+    }
+    function moveCursorFine(dir, mag) {
+        var d = getDuration();
+        if (d <= 0) return;
+        cursorTime = clamp(cursorTime + dir * fineStepSec(mag), 0, Math.max(0, d - 0.25));
+        cursorMoved = true;
+        updateTimeline();
+        schedulePreview(cursorTime);
+        showControls(false);
+    }
+    function wheelHandler(e) {
+        if (closed || modalOpen) return;
+        var dx = 0;
+        try {
+            if (typeof e.deltaX === 'number' && e.deltaX !== 0) dx = e.deltaX;
+            else if (typeof e.wheelDeltaX === 'number' && e.wheelDeltaX !== 0) dx = -e.wheelDeltaX / 10;
+        } catch (err) {}
+        if (!dx) return;
+        try { e.preventDefault(); } catch (err) {}
+        var dir = dx > 0 ? 1 : -1;
+        var mag = Math.abs(dx);
+        if (!controlsOn || focusZone !== 'timeline') { fineSeek(dir, mag); return; }
+        moveCursorFine(dir, mag);
     }
     function applyCursor() {
         if (!cursorActive) return;
@@ -620,6 +694,7 @@ function rezkaDirectPlay(url, meta) {
         currentUrl = newUrl;
         loading = true;
         pendingSeek = keepPos;
+        log('quality switch ->', label, newUrl);
         destroyPreview();
         try {
             v.src = newUrl;
@@ -662,6 +737,9 @@ function rezkaDirectPlay(url, meta) {
     }
     function togglePlay() {
         if (closed || !v) return;
+        var nowP = Date.now();
+        if (nowP - lastPpAt < 300) return;
+        lastPpAt = nowP;
         if (mutedAutoplay) {
             mutedAutoplay = false;
             try { v.muted = false; } catch (e) {}
@@ -780,6 +858,11 @@ function rezkaDirectPlay(url, meta) {
 
         try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
 
+        if (isSelectKey(e)) {
+            var nowS = Date.now();
+            if (e.repeat || nowS - lastSelectAt < 400) return;
+            lastSelectAt = nowS;
+        }
         if (modalOpen) { handleModalKey(e); return; }
 
         if (isBackKey(e)) {
@@ -787,7 +870,7 @@ function rezkaDirectPlay(url, meta) {
             else close();
             return;
         }
-        if (isPlayPauseKey(e)) { togglePlay(); return; }
+        if (isPlayPauseKey(e)) { if (!e.repeat) togglePlay(); return; }
 
         if (!controlsOn) {
             if (isLeftKey(e)) { if (e.repeat) return; quickSeek(-1); return; }
@@ -825,11 +908,11 @@ function rezkaDirectPlay(url, meta) {
         started = true; loading = false;
         if (!flashActive) refreshCenter();
         syncPlayIcon();
-        showControls(true);
+        maybeAutoHide();
         if (mutedAutoplay) showHint('Нажмите Play, чтобы включить звук');
     };
     var onCanPlay = function () { try { if (v.readyState >= 3) loading = false; } catch (e) {} refreshCenter(); };
-    var onPlay = function () { started = true; syncPlayIcon(); if (!cursorActive && !cursorMoved) flashCenter('play'); showControls(true); };
+    var onPlay = function () { started = true; syncPlayIcon(); if (!cursorActive && !cursorMoved) flashCenter('play'); maybeAutoHide(); };
     var onPause = function () { saveTimeline(false); syncPlayIcon(); refreshCenter(); showControls(false); };
     var onEnded = function () { saveTimeline(true); close(); };
     var onError = function () {
@@ -863,12 +946,14 @@ function rezkaDirectPlay(url, meta) {
         if (closed) return;
         closed = true;
 
-        var timers = [uiTimer, errTimer, hintTimer, flashTimer, sideTimerL, sideTimerR, shortSeekTimer, pvTimer];
+        var timers = [uiTimer, errTimer, hintTimer, flashTimer, sideTimerL, sideTimerR, shortSeekTimer, pvTimer, pvFailTimer];
         for (var ti = 0; ti < timers.length; ti++) { if (timers[ti]) clearTimeout(timers[ti]); }
 
         try { saveTimeline(true); } catch (e) {}
         try { if (stopWatch) stopWatch(); } catch (e) {}
         try { document.removeEventListener('keydown', keyHandler, true); } catch (e) {}
+        try { document.removeEventListener('wheel', wheelHandler, false); } catch (e) {}
+        try { document.removeEventListener('mousewheel', wheelHandler, false); } catch (e) {}
         try { document.removeEventListener('visibilitychange', visHandler); } catch (e) {}
         try { document.removeEventListener('webkitvisibilitychange', visHandler); } catch (e) {}
         try { removeVideoListeners(); } catch (e) {}
@@ -884,6 +969,8 @@ function rezkaDirectPlay(url, meta) {
 
     // ---------- старт ----------
     document.addEventListener('keydown', keyHandler, true);
+    document.addEventListener('wheel', wheelHandler, false);
+    try { document.addEventListener('mousewheel', wheelHandler, false); } catch (e) {}
     document.addEventListener('visibilitychange', visHandler);
     try { document.addEventListener('webkitvisibilitychange', visHandler); } catch (e) {}
 
@@ -3089,7 +3176,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '5.1.0',
+version: '5.2.0',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
