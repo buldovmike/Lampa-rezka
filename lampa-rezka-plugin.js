@@ -23,40 +23,54 @@ function rezkaDirectClose() {
 }
 
 function rezkaDirectEnsureCss() {
-    if (document.getElementById('rezka-direct-css')) return;
+    var old = document.getElementById('rezka-direct-css');
+    if (old && old.parentNode) {
+        old.parentNode.removeChild(old);
+    }
+
+    if (document.getElementById('rezka-direct-css-v2')) return;
 
     var css = '' +
         '.rezka-direct{position:fixed;left:0;top:0;width:100%;height:100%;background:#000;z-index:2147483647;}' +
         '.rezka-direct video{width:100%;height:100%;object-fit:contain;background:#000;}' +
 
-        '.rezka-direct-top{position:absolute;top:0;left:0;right:0;padding:24px 36px;background:rgba(0,0,0,.55);opacity:0;-webkit-transition:opacity .25s;transition:opacity .25s;pointer-events:none;}' +
-        '.rezka-direct-bottom{position:absolute;left:0;right:0;bottom:0;padding:24px 36px 28px;background:rgba(0,0,0,.55);opacity:0;-webkit-transition:opacity .25s;transition:opacity .25s;pointer-events:none;}' +
+        '.rezka-direct-top{position:absolute;top:0;left:0;right:0;padding:24px 36px;background:rgba(10,10,10,.72);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);opacity:0;-webkit-transition:opacity .25s;transition:opacity .25s;pointer-events:none;}' +
+        '.rezka-direct-bottom{position:absolute;left:0;right:0;bottom:0;padding:24px 36px 28px;background:rgba(10,10,10,.72);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);opacity:0;-webkit-transition:opacity .25s;transition:opacity .25s;pointer-events:none;}' +
         '.rezka-direct-top.visible,.rezka-direct-bottom.visible{opacity:1;}' +
 
         '.rezka-direct-title{font-size:30px;color:#fff;text-shadow:0 1px 2px #000;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
         '.rezka-direct-sub{margin-top:6px;font-size:20px;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
 
-        '.rezka-direct-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}' +
+        '.rezka-direct-row{display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:space-between;justify-content:space-between;margin-bottom:12px;}' +
         '.rezka-direct-state{font-size:22px;color:#fff;text-shadow:0 1px 2px #000;}' +
         '.rezka-direct-time{font-size:22px;color:#eee;text-shadow:0 1px 2px #000;}' +
 
-        '.rezka-direct-track{height:8px;background:rgba(255,255,255,.22);border-radius:4px;overflow:hidden;}' +
-        '.rezka-direct-fill{height:100%;width:0%;background:#5c86c5;}' +
+        '.rezka-direct-track{position:relative;height:6px;background:rgba(255,255,255,.22);border-radius:999px;-webkit-transition:height .15s;transition:height .15s;}' +
+        '.rezka-direct-track.scrub{height:10px;}' +
+        '.rezka-direct-fill{height:100%;width:0%;background:#7aa7ff;border-radius:999px;}' +
+
+        '.rezka-direct-cursor{position:absolute;top:50%;left:0;width:16px;height:16px;border-radius:50%;background:#fff;-webkit-transform:translate(-50%,-50%);transform:translate(-50%,-50%);box-shadow:0 0 0 4px rgba(255,255,255,.22),0 2px 8px rgba(0,0,0,.45);opacity:0;-webkit-transition:opacity .15s;transition:opacity .15s;pointer-events:none;}' +
+        '.rezka-direct-cursor.visible{opacity:1;}' +
 
         '.rezka-direct-center{position:absolute;left:50%;top:50%;-webkit-transform:translate(-50%,-50%);transform:translate(-50%,-50%);text-align:center;color:#fff;opacity:0;-webkit-transition:opacity .2s;transition:opacity .2s;pointer-events:none;}' +
         '.rezka-direct-center.visible{opacity:1;}' +
 
-        '.rezka-direct-spinner{width:64px;height:64px;border:6px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;margin:0 auto 12px;-webkit-animation:rezka-spin 1s linear infinite;animation:rezka-spin 1s linear infinite;}' +
+        '.rezka-direct-badge{width:120px;height:120px;border-radius:50%;background:rgba(0,0,0,.45);display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center;margin:0 auto 12px;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);}' +
+        '.rezka-direct-badge svg{width:56px;height:56px;fill:#fff;}' +
+        '.rezka-direct-spinner{width:56px;height:56px;border:5px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;-webkit-animation:rezka-spin 1s linear infinite;animation:rezka-spin 1s linear infinite;}' +
         '.rezka-direct-msg{font-size:24px;text-shadow:0 1px 2px #000;}' +
 
-        '.rezka-direct-hint{position:absolute;bottom:120px;left:0;right:0;text-align:center;color:#ffcc66;font-size:22px;text-shadow:0 1px 2px #000;opacity:0;-webkit-transition:opacity .2s;transition:opacity .2s;pointer-events:none;}' +
+        '.rezka-direct-seek{position:absolute;top:16%;left:50%;-webkit-transform:translateX(-50%);transform:translateX(-50%);padding:8px 18px;background:rgba(0,0,0,.72);border-radius:999px;color:#fff;font-size:26px;text-shadow:0 1px 2px #000;opacity:0;-webkit-transition:opacity .18s;transition:opacity .18s;pointer-events:none;white-space:nowrap;}' +
+        '.rezka-direct-seek.visible{opacity:1;}' +
+
+        '.rezka-direct-hint{position:absolute;bottom:130px;left:0;right:0;text-align:center;color:#ffcc66;font-size:22px;text-shadow:0 1px 2px #000;opacity:0;-webkit-transition:opacity .2s;transition:opacity .2s;pointer-events:none;}' +
         '.rezka-direct-hint.visible{opacity:1;}' +
 
         '@-webkit-keyframes rezka-spin{to{-webkit-transform:rotate(360deg);transform:rotate(360deg)}}' +
         '@keyframes rezka-spin{to{-webkit-transform:rotate(360deg);transform:rotate(360deg)}}';
 
     var st = document.createElement('style');
-    st.id = 'rezka-direct-css';
+    st.id = 'rezka-direct-css-v2';
 
     try {
         st.appendChild(document.createTextNode(css));
@@ -175,10 +189,28 @@ function rezkaDirectPlay(url, meta) {
     var uiTimer = null;
     var errTimer = null;
     var hintTimer = null;
+    var flashTimer = null;
+    var seekPillTimer = null;
+    var shortSeekTimer = null;
 
     var loading = true;
     var started = false;
     var mutedAutoplay = false;
+    var errorMode = false;
+    var flashActive = false;
+
+    var scrubActive = false;
+    var scrubMoved = false;
+    var scrubTime = 0;
+    var scrubBurstCount = 0;
+    var scrubBurstAt = 0;
+
+    var shortSeekCount = 0;
+    var shortSeekAt = 0;
+
+    var ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
+    var ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>';
+    var ICON_ERROR = '<svg viewBox="0 0 24 24"><path d="M12 2 1 21h22L12 2zm1 14h-2v2h2v-2zm0-8h-2v6h2V8z"/></svg>';
 
     var $wrap = $('<div class="rezka-direct"></div>');
 
@@ -213,21 +245,24 @@ function rezkaDirectPlay(url, meta) {
     var $state = $('<div class="rezka-direct-state">Загрузка…</div>');
     var $time = $('<div class="rezka-direct-time">--:-- / --:--</div>');
 
-    var $track = $('<div class="rezka-direct-track"><div class="rezka-direct-fill"></div></div>');
+    var $track = $('<div class="rezka-direct-track"><div class="rezka-direct-fill"></div><div class="rezka-direct-cursor"></div></div>');
     var $fill = $track.find('.rezka-direct-fill');
+    var $cursor = $track.find('.rezka-direct-cursor');
 
     $row.append($state).append($time);
     $bottom.append($row).append($track);
 
-    var $center = $('<div class="rezka-direct-center"><div class="rezka-direct-spinner"></div><div class="rezka-direct-msg">Загрузка…</div></div>');
-    var $spinner = $center.find('.rezka-direct-spinner');
+    var $center = $('<div class="rezka-direct-center"><div class="rezka-direct-badge"></div><div class="rezka-direct-msg"></div></div>');
+    var $badge = $center.find('.rezka-direct-badge');
     var $msg = $center.find('.rezka-direct-msg');
 
+    var $seek = $('<div class="rezka-direct-seek"></div>');
     var $hint = $('<div class="rezka-direct-hint"></div>');
 
     $wrap.append(v);
     $wrap.append($top);
     $wrap.append($bottom);
+    $wrap.append($seek);
     $wrap.append($center);
     $wrap.append($hint);
 
@@ -254,6 +289,23 @@ function rezkaDirectPlay(url, meta) {
         return m + ':' + z(s);
     }
 
+    function clamp(n, min, max) {
+        return Math.max(min, Math.min(max, n));
+    }
+
+    function getDuration() {
+        try {
+            if (isFinite(v.duration)) {
+                return v.duration;
+            }
+        } catch (e) {}
+        return 0;
+    }
+
+    function canSeek() {
+        return getDuration() > 0;
+    }
+
     function saveTimeline(force) {
         var now = Date.now();
 
@@ -277,13 +329,13 @@ function rezkaDirectPlay(url, meta) {
             uiTimer = null;
         }
 
-        if (autoHide && started && !v.paused && !loading) {
+        if (autoHide && started && !v.paused && !loading && !scrubActive) {
             uiTimer = setTimeout(hideUI, 3500);
         }
     }
 
     function hideUI() {
-        if (closed || !v || v.paused || loading || !started) return;
+        if (closed || !v || v.paused || loading || !started || scrubActive) return;
 
         $top.removeClass('visible');
         $bottom.removeClass('visible');
@@ -305,55 +357,123 @@ function rezkaDirectPlay(url, meta) {
         }, 4000);
     }
 
-    function refreshCenter() {
+    function showSeekPill(text) {
         if (closed) return;
+
+        $seek.text(text).addClass('visible');
+
+        if (seekPillTimer) {
+            clearTimeout(seekPillTimer);
+        }
+
+        seekPillTimer = setTimeout(function () {
+            if (!closed) {
+                $seek.removeClass('visible');
+            }
+        }, 900);
+    }
+
+    function setCenter(mode, msg) {
+        if (closed) return;
+
+        if (mode === 'hide') {
+            $center.removeClass('visible');
+            return;
+        }
+
+        var html = '';
+
+        if (mode === 'loading') {
+            html = '<div class="rezka-direct-spinner"></div>';
+        } else if (mode === 'play') {
+            html = ICON_PLAY;
+        } else if (mode === 'pause') {
+            html = ICON_PAUSE;
+        } else if (mode === 'error') {
+            html = ICON_ERROR;
+        }
+
+        $badge.html(html);
+        $msg.text(msg || '');
+        $center.addClass('visible');
+    }
+
+    function flashCenter(mode) {
+        if (closed || errorMode) return;
+
+        flashActive = true;
+        setCenter(mode);
+
+        if (flashTimer) {
+            clearTimeout(flashTimer);
+        }
+
+        flashTimer = setTimeout(function () {
+            flashActive = false;
+            refreshCenter();
+        }, 620);
+    }
+
+    function updateStateText() {
+        if (closed) return;
+
+        if (errorMode) {
+            $state.text('Ошибка');
+            return;
+        }
+
+        if (scrubActive) {
+            $state.text('Перемотка: ' + fmt(scrubTime));
+            return;
+        }
+
+        if (!started) {
+            $state.text(loading ? 'Подключение…' : 'Остановлено');
+        } else if (loading && !v.paused) {
+            $state.text('Буферизация');
+        } else if (v.paused) {
+            $state.text('Пауза');
+        } else {
+            $state.text('Воспроизведение');
+        }
+    }
+
+    function refreshCenter() {
+        if (closed || errorMode || flashActive) return;
+
+        if (scrubActive) {
+            setCenter('hide');
+            return;
+        }
 
         if (!started) {
             if (loading) {
-                $spinner.show();
-                $msg.text('Загрузка…');
-                $state.text('Подключение…');
+                setCenter('loading');
             } else {
-                $spinner.hide();
-                $msg.text('Нажмите Play');
-                $state.text('Остановлено');
+                setCenter('play');
             }
-
-            $center.addClass('visible');
         } else if (loading && !v.paused) {
-            $spinner.show();
-            $msg.text('Буферизация');
-            $center.addClass('visible');
-            $state.text('Буферизация');
+            setCenter('loading');
         } else if (v.paused) {
-            $spinner.hide();
-            $msg.text('Пауза');
-            $center.addClass('visible');
-            $state.text('Пауза');
+            setCenter('pause');
         } else {
-            $center.removeClass('visible');
-            $state.text('Воспроизведение');
+            setCenter('hide');
         }
     }
 
     function updateProgress() {
         if (closed) return;
 
-        var d = 0;
-
-        try {
-            if (isFinite(v.duration)) {
-                d = v.duration;
-            }
-        } catch (e) {}
-
+        var d = getDuration();
         var c = 0;
 
         try {
             c = v.currentTime || 0;
         } catch (e) {}
 
-        $time.text(fmt(c) + ' / ' + (d > 0 ? fmt(d) : '--:--'));
+        var display = scrubActive ? scrubTime : c;
+
+        $time.text(fmt(display) + ' / ' + (d > 0 ? fmt(d) : '--:--'));
 
         if (d > 0) {
             var p = Math.min(100, Math.floor((c / d) * 100));
@@ -361,18 +481,21 @@ function rezkaDirectPlay(url, meta) {
         } else {
             $fill.css('width', '0%');
         }
+
+        if (scrubActive && d > 0) {
+            var pos = clamp((scrubTime / d) * 100, 0, 100);
+            $cursor.css('left', pos + '%').addClass('visible');
+            $track.addClass('scrub');
+        } else {
+            $cursor.removeClass('visible');
+            $track.removeClass('scrub');
+        }
     }
 
     function trySeek() {
         if (!pendingSeek || closed) return;
 
-        var d = 0;
-
-        try {
-            if (isFinite(v.duration)) {
-                d = v.duration;
-            }
-        } catch (e) {}
+        var d = getDuration();
 
         if (d > 0) {
             if (pendingSeek < d - 10) {
@@ -383,6 +506,196 @@ function rezkaDirectPlay(url, meta) {
             }
 
             pendingSeek = 0;
+        }
+    }
+
+    function enterScrub() {
+        if (!canSeek()) {
+            showHint('Таймлайн ещё недоступен');
+            return;
+        }
+
+        scrubActive = true;
+        scrubMoved = false;
+        scrubTime = v.currentTime || 0;
+        scrubBurstCount = 0;
+        scrubBurstAt = 0;
+
+        $seek.removeClass('visible');
+
+        updateProgress();
+        updateStateText();
+        refreshCenter();
+        showHint('OK — перейти · Back — отмена');
+        showUI(false);
+    }
+
+    function cancelScrub() {
+        if (!scrubActive) return;
+
+        scrubActive = false;
+        scrubMoved = false;
+
+        updateProgress();
+        updateStateText();
+        refreshCenter();
+        showUI(true);
+    }
+
+    function moveScrub(dir) {
+        if (!scrubActive) return;
+
+        var d = getDuration();
+        if (d <= 0) return;
+
+        var now = Date.now();
+
+        if (now - scrubBurstAt <= 700) {
+            scrubBurstCount += 1;
+        } else {
+            scrubBurstCount = 1;
+        }
+
+        scrubBurstAt = now;
+
+        var base = Math.max(5, d * 0.005);
+        var mult = Math.min(scrubBurstCount, 12);
+        var step = Math.min(d * 0.05, base * mult);
+
+        scrubTime = clamp(scrubTime + dir * step, 0, Math.max(0, d - 0.25));
+        scrubMoved = true;
+
+        updateProgress();
+        updateStateText();
+        showUI(false);
+    }
+
+    function applyScrub() {
+        if (!scrubActive) return;
+
+        var target = scrubTime;
+
+        scrubActive = false;
+        scrubMoved = false;
+
+        try {
+            v.currentTime = target;
+        } catch (e) {}
+
+        showSeekPill('→ ' + fmt(target));
+        saveTimeline(true);
+
+        updateProgress();
+        updateStateText();
+        refreshCenter();
+        showUI(true);
+    }
+
+    function shortSeek(dir) {
+        if (!canSeek()) return;
+
+        var d = getDuration();
+        var c = 0;
+
+        try {
+            c = v.currentTime || 0;
+        } catch (e) {}
+
+        var now = Date.now();
+
+        if (now - shortSeekAt <= 800) {
+            shortSeekCount += 1;
+        } else {
+            shortSeekCount = 1;
+        }
+
+        shortSeekAt = now;
+
+        var mult = Math.min(shortSeekCount, 10);
+        var delta = dir * 10 * mult;
+        var target = clamp(c + delta, 0, Math.max(0, d - 0.25));
+
+        try {
+            v.currentTime = target;
+        } catch (e) {}
+
+        showSeekPill((delta > 0 ? '+' : '-') + Math.abs(Math.round(delta)) + ' с · ' + fmt(target));
+
+        updateProgress();
+        saveTimeline(false);
+        refreshCenter();
+
+        if (shortSeekTimer) {
+            clearTimeout(shortSeekTimer);
+        }
+
+        shortSeekTimer = setTimeout(function () {
+            shortSeekCount = 0;
+        }, 900);
+    }
+
+    function handleSelect() {
+        if (scrubActive) {
+            if (scrubMoved) {
+                applyScrub();
+            } else {
+                scrubActive = false;
+                scrubMoved = false;
+
+                updateProgress();
+                updateStateText();
+                refreshCenter();
+                togglePlay();
+            }
+
+            return;
+        }
+
+        togglePlay();
+    }
+
+    function handlePlayPauseKey() {
+        if (scrubActive) {
+            if (scrubMoved) {
+                applyScrub();
+            } else {
+                scrubActive = false;
+                scrubMoved = false;
+
+                updateProgress();
+                updateStateText();
+                refreshCenter();
+            }
+        }
+
+        togglePlay();
+    }
+
+    function handleLeft(e) {
+        if (scrubActive) {
+            moveScrub(-1);
+            return;
+        }
+
+        if (e && e.repeat) return;
+        shortSeek(-1);
+    }
+
+    function handleRight(e) {
+        if (scrubActive) {
+            moveScrub(1);
+            return;
+        }
+
+        if (e && e.repeat) return;
+        shortSeek(1);
+    }
+
+    function handleTimelineMode() {
+        if (scrubActive) {
+            cancelScrub();
+        } else {
+            enterScrub();
         }
     }
 
@@ -490,6 +803,17 @@ function rezkaDirectPlay(url, meta) {
                key === 'browser_back';
     }
 
+    function isSelectKey(e) {
+        var k = e.keyCode;
+        var key = String(e.key || '').toLowerCase();
+
+        return k === 13 ||
+               key === 'enter' ||
+               key === 'select' ||
+               key === 'ok' ||
+               key === 'mediaselect';
+    }
+
     function isPlayPauseKey(e) {
         var k = e.keyCode;
         var key = String(e.key || '').toLowerCase();
@@ -500,19 +824,66 @@ function rezkaDirectPlay(url, meta) {
                key === 'playpause' ||
                k === 179 ||
                k === 19 ||
-               k === 415;
+               k === 415 ||
+               k === 32;
+    }
+
+    function isLeftKey(e) {
+        var k = e.keyCode;
+        var key = String(e.key || '').toLowerCase();
+
+        return k === 37 ||
+               key === 'arrowleft' ||
+               key === 'left';
+    }
+
+    function isRightKey(e) {
+        var k = e.keyCode;
+        var key = String(e.key || '').toLowerCase();
+
+        return k === 39 ||
+               key === 'arrowright' ||
+               key === 'right';
+    }
+
+    function isUpKey(e) {
+        var k = e.keyCode;
+        var key = String(e.key || '').toLowerCase();
+
+        return k === 38 ||
+               key === 'arrowup' ||
+               key === 'up';
+    }
+
+    function isDownKey(e) {
+        var k = e.keyCode;
+        var key = String(e.key || '').toLowerCase();
+
+        return k === 40 ||
+               key === 'arrowdown' ||
+               key === 'down';
     }
 
     var onLoadedMetadata = function () {
         trySeek();
         updateProgress();
+        updateStateText();
         refreshCenter();
         showUI(true);
     };
 
     var onDurationChange = function () {
         trySeek();
+
+        if (scrubActive) {
+            var d = getDuration();
+            if (d > 0) {
+                scrubTime = clamp(scrubTime, 0, Math.max(0, d - 0.25));
+            }
+        }
+
         updateProgress();
+        updateStateText();
     };
 
     var onTimeUpdate = function () {
@@ -522,6 +893,7 @@ function rezkaDirectPlay(url, meta) {
 
     var onWaiting = function () {
         loading = true;
+        updateStateText();
         refreshCenter();
         showUI(true);
     };
@@ -529,8 +901,12 @@ function rezkaDirectPlay(url, meta) {
     var onPlaying = function () {
         started = true;
         loading = false;
-        refreshCenter();
+        updateStateText();
         showUI(true);
+
+        if (!flashActive) {
+            refreshCenter();
+        }
 
         if (mutedAutoplay) {
             showHint('Нажмите Play, чтобы включить звук');
@@ -544,19 +920,25 @@ function rezkaDirectPlay(url, meta) {
             }
         } catch (e) {}
 
+        updateStateText();
         refreshCenter();
     };
 
     var onPlay = function () {
         started = true;
-        refreshCenter();
+        updateStateText();
         showUI(true);
+
+        if (!scrubActive) {
+            flashCenter('play');
+        }
     };
 
     var onPause = function () {
         saveTimeline(false);
-        refreshCenter();
+        updateStateText();
         showUI(false);
+        refreshCenter();
     };
 
     var onEnded = function () {
@@ -567,8 +949,11 @@ function rezkaDirectPlay(url, meta) {
     var onError = function () {
         if (closed) return;
 
+        errorMode = true;
         loading = false;
         started = true;
+        scrubActive = false;
+        scrubMoved = false;
 
         var er = v.error;
         var msg = 'ошибка видео';
@@ -581,10 +966,9 @@ function rezkaDirectPlay(url, meta) {
             }
         }
 
-        $spinner.hide();
-        $msg.text('Ошибка: ' + msg);
-        $center.addClass('visible');
-        $state.text('Ошибка');
+        setCenter('error', 'Ошибка: ' + msg);
+        updateStateText();
+        showUI(false);
 
         log('direct media error', er && er.code, er && er.message);
 
@@ -632,6 +1016,21 @@ function rezkaDirectPlay(url, meta) {
         if (hintTimer) {
             clearTimeout(hintTimer);
             hintTimer = null;
+        }
+
+        if (flashTimer) {
+            clearTimeout(flashTimer);
+            flashTimer = null;
+        }
+
+        if (seekPillTimer) {
+            clearTimeout(seekPillTimer);
+            seekPillTimer = null;
+        }
+
+        if (shortSeekTimer) {
+            clearTimeout(shortSeekTimer);
+            shortSeekTimer = null;
         }
 
         try {
@@ -686,7 +1085,22 @@ function rezkaDirectPlay(url, meta) {
                 e.stopPropagation();
             } catch (e2) {}
 
-            close();
+            if (scrubActive) {
+                cancelScrub();
+            } else {
+                close();
+            }
+
+            return;
+        }
+
+        if (isSelectKey(e)) {
+            try {
+                e.preventDefault();
+                e.stopPropagation();
+            } catch (e2) {}
+
+            handleSelect();
             return;
         }
 
@@ -696,7 +1110,37 @@ function rezkaDirectPlay(url, meta) {
                 e.stopPropagation();
             } catch (e2) {}
 
-            togglePlay();
+            handlePlayPauseKey();
+            return;
+        }
+
+        if (isLeftKey(e)) {
+            try {
+                e.preventDefault();
+                e.stopPropagation();
+            } catch (e2) {}
+
+            handleLeft(e);
+            return;
+        }
+
+        if (isRightKey(e)) {
+            try {
+                e.preventDefault();
+                e.stopPropagation();
+            } catch (e2) {}
+
+            handleRight(e);
+            return;
+        }
+
+        if (isUpKey(e) || isDownKey(e)) {
+            try {
+                e.preventDefault();
+                e.stopPropagation();
+            } catch (e2) {}
+
+            handleTimelineMode();
             return;
         }
 
@@ -740,8 +1184,9 @@ function rezkaDirectPlay(url, meta) {
     rezkaDirectState.close = close;
 
     showUI(true);
-    refreshCenter();
     updateProgress();
+    updateStateText();
+    refreshCenter();
 
     log('direct play started', {
         url: url,
