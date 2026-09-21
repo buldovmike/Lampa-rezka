@@ -22,6 +22,56 @@ function rezkaDirectClose() {
     }
 }
 
+function rezkaDirectEnsureCss() {
+    if (document.getElementById('rezka-direct-css')) return;
+
+    var css = '' +
+        '.rezka-direct{position:fixed;left:0;top:0;width:100%;height:100%;background:#000;z-index:2147483647;}' +
+        '.rezka-direct video{width:100%;height:100%;object-fit:contain;background:#000;}' +
+
+        '.rezka-direct-top{position:absolute;top:0;left:0;right:0;padding:24px 36px;background:rgba(0,0,0,.55);opacity:0;-webkit-transition:opacity .25s;transition:opacity .25s;pointer-events:none;}' +
+        '.rezka-direct-bottom{position:absolute;left:0;right:0;bottom:0;padding:24px 36px 28px;background:rgba(0,0,0,.55);opacity:0;-webkit-transition:opacity .25s;transition:opacity .25s;pointer-events:none;}' +
+        '.rezka-direct-top.visible,.rezka-direct-bottom.visible{opacity:1;}' +
+
+        '.rezka-direct-title{font-size:30px;color:#fff;text-shadow:0 1px 2px #000;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+        '.rezka-direct-sub{margin-top:6px;font-size:20px;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+
+        '.rezka-direct-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}' +
+        '.rezka-direct-state{font-size:22px;color:#fff;text-shadow:0 1px 2px #000;}' +
+        '.rezka-direct-time{font-size:22px;color:#eee;text-shadow:0 1px 2px #000;}' +
+
+        '.rezka-direct-track{height:8px;background:rgba(255,255,255,.22);border-radius:4px;overflow:hidden;}' +
+        '.rezka-direct-fill{height:100%;width:0%;background:#5c86c5;}' +
+
+        '.rezka-direct-center{position:absolute;left:50%;top:50%;-webkit-transform:translate(-50%,-50%);transform:translate(-50%,-50%);text-align:center;color:#fff;opacity:0;-webkit-transition:opacity .2s;transition:opacity .2s;pointer-events:none;}' +
+        '.rezka-direct-center.visible{opacity:1;}' +
+
+        '.rezka-direct-spinner{width:64px;height:64px;border:6px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;margin:0 auto 12px;-webkit-animation:rezka-spin 1s linear infinite;animation:rezka-spin 1s linear infinite;}' +
+        '.rezka-direct-msg{font-size:24px;text-shadow:0 1px 2px #000;}' +
+
+        '.rezka-direct-hint{position:absolute;bottom:120px;left:0;right:0;text-align:center;color:#ffcc66;font-size:22px;text-shadow:0 1px 2px #000;opacity:0;-webkit-transition:opacity .2s;transition:opacity .2s;pointer-events:none;}' +
+        '.rezka-direct-hint.visible{opacity:1;}' +
+
+        '@-webkit-keyframes rezka-spin{to{-webkit-transform:rotate(360deg);transform:rotate(360deg)}}' +
+        '@keyframes rezka-spin{to{-webkit-transform:rotate(360deg);transform:rotate(360deg)}}';
+
+    var st = document.createElement('style');
+    st.id = 'rezka-direct-css';
+
+    try {
+        st.appendChild(document.createTextNode(css));
+    } catch (e) {
+        st.text = css;
+    }
+
+    var head = document.getElementsByTagName('head')[0];
+    if (head) {
+        head.appendChild(st);
+    } else if (document.body) {
+        document.body.appendChild(st);
+    }
+}
+
 function rezkaTimelineGetTime(hash) {
     if (!hash) return 0;
 
@@ -107,59 +157,508 @@ function rezkaWatchStart(meta) {
 
 function rezkaDirectPlay(url, meta) {
     if (!url) {
-        Lampa.Noty.show('Rezka Direct: нет URL потока');
+        try {
+            Lampa.Noty.show('Rezka Direct: нет URL потока');
+        } catch (e) {}
         return;
     }
 
     rezkaDirectClose();
+    rezkaDirectEnsureCss();
 
     var hash = meta && meta.hash ? meta.hash : '';
     var savedTime = rezkaTimelineGetTime(hash);
+    var pendingSeek = savedTime > 0 ? savedTime : 0;
+
     var closed = false;
     var lastSave = 0;
+    var uiTimer = null;
+    var errTimer = null;
+    var hintTimer = null;
 
-    var $wrap = $('<div style="position:fixed;left:0;top:0;width:100%;height:100%;background:#000;z-index:2147483647;"></div>');
+    var loading = true;
+    var started = false;
+    var mutedAutoplay = false;
+
+    var $wrap = $('<div class="rezka-direct"></div>');
+
     var v = document.createElement('video');
-
     v.style.width = '100%';
     v.style.height = '100%';
-
     v.setAttribute('playsinline', '');
     v.setAttribute('webkit-playsinline', '');
-
     v.preload = 'auto';
     v.muted = false;
 
+    var titleText = (meta && meta.title) || (meta && meta._card && meta._card.title) || 'Rezka';
+    var subParts = [];
+
+    if (meta && meta.voice) {
+        subParts.push(meta.voice);
+    }
+
+    if (meta && meta.season && meta.episode) {
+        subParts.push('S' + meta.season + ' E' + meta.episode);
+    }
+
+    var $top = $('<div class="rezka-direct-top"></div>');
+    $top.append($('<div class="rezka-direct-title"></div>').text(titleText));
+
+    if (subParts.length) {
+        $top.append($('<div class="rezka-direct-sub"></div>').text(subParts.join(' • ')));
+    }
+
+    var $bottom = $('<div class="rezka-direct-bottom"></div>');
+    var $row = $('<div class="rezka-direct-row"></div>');
+    var $state = $('<div class="rezka-direct-state">Загрузка…</div>');
+    var $time = $('<div class="rezka-direct-time">--:-- / --:--</div>');
+
+    var $track = $('<div class="rezka-direct-track"><div class="rezka-direct-fill"></div></div>');
+    var $fill = $track.find('.rezka-direct-fill');
+
+    $row.append($state).append($time);
+    $bottom.append($row).append($track);
+
+    var $center = $('<div class="rezka-direct-center"><div class="rezka-direct-spinner"></div><div class="rezka-direct-msg">Загрузка…</div></div>');
+    var $spinner = $center.find('.rezka-direct-spinner');
+    var $msg = $center.find('.rezka-direct-msg');
+
+    var $hint = $('<div class="rezka-direct-hint"></div>');
+
     $wrap.append(v);
+    $wrap.append($top);
+    $wrap.append($bottom);
+    $wrap.append($center);
+    $wrap.append($hint);
+
     $('body').append($wrap);
 
     var stopWatch = rezkaWatchStart(meta);
-
     histPush(meta);
+
+    function fmt(sec) {
+        sec = Math.max(0, Math.floor(sec || 0));
+
+        var h = Math.floor(sec / 3600);
+        var m = Math.floor((sec % 3600) / 60);
+        var s = sec % 60;
+
+        function z(n) {
+            return n < 10 ? '0' + n : '' + n;
+        }
+
+        if (h > 0) {
+            return h + ':' + z(m) + ':' + z(s);
+        }
+
+        return m + ':' + z(s);
+    }
 
     function saveTimeline(force) {
         var now = Date.now();
 
         if (force || now - lastSave > 5000) {
             lastSave = now;
-            rezkaTimelineSave(hash, v);
+
+            try {
+                rezkaTimelineSave(hash, v);
+            } catch (e) {}
         }
+    }
+
+    function showUI(autoHide) {
+        if (closed) return;
+
+        $top.addClass('visible');
+        $bottom.addClass('visible');
+
+        if (uiTimer) {
+            clearTimeout(uiTimer);
+            uiTimer = null;
+        }
+
+        if (autoHide && started && !v.paused && !loading) {
+            uiTimer = setTimeout(hideUI, 3500);
+        }
+    }
+
+    function hideUI() {
+        if (closed || !v || v.paused || loading || !started) return;
+
+        $top.removeClass('visible');
+        $bottom.removeClass('visible');
+    }
+
+    function showHint(text) {
+        if (closed) return;
+
+        $hint.text(text).addClass('visible');
+
+        if (hintTimer) {
+            clearTimeout(hintTimer);
+        }
+
+        hintTimer = setTimeout(function () {
+            if (!closed) {
+                $hint.removeClass('visible');
+            }
+        }, 4000);
+    }
+
+    function refreshCenter() {
+        if (closed) return;
+
+        if (!started) {
+            if (loading) {
+                $spinner.show();
+                $msg.text('Загрузка…');
+                $state.text('Подключение…');
+            } else {
+                $spinner.hide();
+                $msg.text('Нажмите Play');
+                $state.text('Остановлено');
+            }
+
+            $center.addClass('visible');
+        } else if (loading && !v.paused) {
+            $spinner.show();
+            $msg.text('Буферизация');
+            $center.addClass('visible');
+            $state.text('Буферизация');
+        } else if (v.paused) {
+            $spinner.hide();
+            $msg.text('Пауза');
+            $center.addClass('visible');
+            $state.text('Пауза');
+        } else {
+            $center.removeClass('visible');
+            $state.text('Воспроизведение');
+        }
+    }
+
+    function updateProgress() {
+        if (closed) return;
+
+        var d = 0;
+
+        try {
+            if (isFinite(v.duration)) {
+                d = v.duration;
+            }
+        } catch (e) {}
+
+        var c = 0;
+
+        try {
+            c = v.currentTime || 0;
+        } catch (e) {}
+
+        $time.text(fmt(c) + ' / ' + (d > 0 ? fmt(d) : '--:--'));
+
+        if (d > 0) {
+            var p = Math.min(100, Math.floor((c / d) * 100));
+            $fill.css('width', p + '%');
+        } else {
+            $fill.css('width', '0%');
+        }
+    }
+
+    function trySeek() {
+        if (!pendingSeek || closed) return;
+
+        var d = 0;
+
+        try {
+            if (isFinite(v.duration)) {
+                d = v.duration;
+            }
+        } catch (e) {}
+
+        if (d > 0) {
+            if (pendingSeek < d - 10) {
+                try {
+                    v.currentTime = pendingSeek;
+                    log('direct play: resume from', pendingSeek);
+                } catch (e) {}
+            }
+
+            pendingSeek = 0;
+        }
+    }
+
+    function handlePlayError(err) {
+        if (closed) return;
+
+        var name = err && err.name ? err.name : '';
+
+        if (name === 'NotAllowedError' && !mutedAutoplay) {
+            mutedAutoplay = true;
+
+            try {
+                v.muted = true;
+            } catch (e) {}
+
+            loading = false;
+            refreshCenter();
+
+            try {
+                var p2 = v.play();
+
+                if (p2 && typeof p2.catch === 'function') {
+                    p2.catch(function (e2) {
+                        log('direct muted autoplay error:', e2 && e2.name, e2 && e2.message);
+
+                        try {
+                            Lampa.Noty.show('Rezka Direct: нажмите Play');
+                        } catch (e3) {}
+                    });
+                }
+            } catch (e) {
+                log('direct muted autoplay exception', e);
+            }
+
+            showHint('Автовоспроизведение без звука. Нажмите Play, чтобы включить звук.');
+            showUI(true);
+            return;
+        }
+
+        log('direct play error:', name, err && err.message);
+
+        try {
+            Lampa.Noty.show('Rezka Direct: ' + (name || 'play error'), { style: 'error' });
+        } catch (e) {}
+    }
+
+    function togglePlay() {
+        if (closed || !v) return;
+
+        if (mutedAutoplay) {
+            mutedAutoplay = false;
+
+            try {
+                v.muted = false;
+            } catch (e) {}
+
+            if (v.paused) {
+                try {
+                    var p0 = v.play();
+
+                    if (p0 && typeof p0.catch === 'function') {
+                        p0.catch(handlePlayError);
+                    }
+                } catch (e) {
+                    handlePlayError(e);
+                }
+            }
+
+            showHint('Звук включён');
+            showUI(true);
+            return;
+        }
+
+        if (v.paused) {
+            try {
+                var p1 = v.play();
+
+                if (p1 && typeof p1.catch === 'function') {
+                    p1.catch(handlePlayError);
+                }
+            } catch (e) {
+                handlePlayError(e);
+            }
+        } else {
+            try {
+                v.pause();
+            } catch (e) {}
+        }
+
+        showUI(true);
+    }
+
+    function isBackKey(e) {
+        var k = e.keyCode;
+        var key = String(e.key || '').toLowerCase();
+
+        return k === 8 ||
+               k === 27 ||
+               k === 461 ||
+               k === 10009 ||
+               key === 'escape' ||
+               key === 'backspace' ||
+               key === 'back' ||
+               key === 'goback' ||
+               key === 'browser_back';
+    }
+
+    function isPlayPauseKey(e) {
+        var k = e.keyCode;
+        var key = String(e.key || '').toLowerCase();
+
+        return key === 'play' ||
+               key === 'pause' ||
+               key === 'mediaplaypause' ||
+               key === 'playpause' ||
+               k === 179 ||
+               k === 19 ||
+               k === 415;
+    }
+
+    var onLoadedMetadata = function () {
+        trySeek();
+        updateProgress();
+        refreshCenter();
+        showUI(true);
+    };
+
+    var onDurationChange = function () {
+        trySeek();
+        updateProgress();
+    };
+
+    var onTimeUpdate = function () {
+        updateProgress();
+        saveTimeline(false);
+    };
+
+    var onWaiting = function () {
+        loading = true;
+        refreshCenter();
+        showUI(true);
+    };
+
+    var onPlaying = function () {
+        started = true;
+        loading = false;
+        refreshCenter();
+        showUI(true);
+
+        if (mutedAutoplay) {
+            showHint('Нажмите Play, чтобы включить звук');
+        }
+    };
+
+    var onCanPlay = function () {
+        try {
+            if (v.readyState >= 3) {
+                loading = false;
+            }
+        } catch (e) {}
+
+        refreshCenter();
+    };
+
+    var onPlay = function () {
+        started = true;
+        refreshCenter();
+        showUI(true);
+    };
+
+    var onPause = function () {
+        saveTimeline(false);
+        refreshCenter();
+        showUI(false);
+    };
+
+    var onEnded = function () {
+        saveTimeline(true);
+        close();
+    };
+
+    var onError = function () {
+        if (closed) return;
+
+        loading = false;
+        started = true;
+
+        var er = v.error;
+        var msg = 'ошибка видео';
+
+        if (er) {
+            if (er.code === 4) {
+                msg = 'формат не поддерживается или ссылка недоступна';
+            } else {
+                msg = 'код ' + er.code;
+            }
+        }
+
+        $spinner.hide();
+        $msg.text('Ошибка: ' + msg);
+        $center.addClass('visible');
+        $state.text('Ошибка');
+
+        log('direct media error', er && er.code, er && er.message);
+
+        try {
+            Lampa.Noty.show('Rezka Direct: ' + msg, { style: 'error' });
+        } catch (e) {}
+
+        if (errTimer) {
+            clearTimeout(errTimer);
+        }
+
+        errTimer = setTimeout(close, 3000);
+    };
+
+    function removeVideoListeners() {
+        try {
+            v.removeEventListener('loadedmetadata', onLoadedMetadata);
+            v.removeEventListener('durationchange', onDurationChange);
+            v.removeEventListener('timeupdate', onTimeUpdate);
+            v.removeEventListener('waiting', onWaiting);
+            v.removeEventListener('playing', onPlaying);
+            v.removeEventListener('canplay', onCanPlay);
+            v.removeEventListener('play', onPlay);
+            v.removeEventListener('pause', onPause);
+            v.removeEventListener('ended', onEnded);
+            v.removeEventListener('error', onError);
+        } catch (e) {}
     }
 
     function close() {
         if (closed) return;
+
         closed = true;
+
+        if (uiTimer) {
+            clearTimeout(uiTimer);
+            uiTimer = null;
+        }
+
+        if (errTimer) {
+            clearTimeout(errTimer);
+            errTimer = null;
+        }
+
+        if (hintTimer) {
+            clearTimeout(hintTimer);
+            hintTimer = null;
+        }
 
         try {
             saveTimeline(true);
         } catch (e) {}
 
         try {
-            if (stopWatch) stopWatch();
+            if (stopWatch) {
+                stopWatch();
+            }
         } catch (e) {}
 
         try {
             document.removeEventListener('keydown', keyHandler, true);
+        } catch (e) {}
+
+        try {
+            removeVideoListeners();
+        } catch (e) {}
+
+        try {
+            v.pause();
+        } catch (e) {}
+
+        try {
+            v.removeAttribute('src');
+            v.load();
         } catch (e) {}
 
         try {
@@ -173,53 +672,76 @@ function rezkaDirectPlay(url, meta) {
         } catch (e) {}
     }
 
-    var keyHandler = function (e) {
-        var k = e.keyCode;
+    function keyHandler(e) {
+        if (closed) return;
 
-        // Back / Escape / типовые коды назад на ТВ
-        if (k === 8 || k === 27 || k === 461 || k === 10009) {
+        // Для диагностики кодов пульта временно можно раскомментировать:
+        // log('direct key', e.keyCode, e.key);
+
+        showUI(true);
+
+        if (isBackKey(e)) {
             try {
                 e.preventDefault();
                 e.stopPropagation();
             } catch (e2) {}
 
             close();
+            return;
         }
-    };
+
+        if (isPlayPauseKey(e)) {
+            try {
+                e.preventDefault();
+                e.stopPropagation();
+            } catch (e2) {}
+
+            togglePlay();
+            return;
+        }
+
+        // Плеер модальный: не отдаём остальные клавиши в Lampa.
+        try {
+            e.preventDefault();
+            e.stopPropagation();
+        } catch (e2) {}
+    }
 
     document.addEventListener('keydown', keyHandler, true);
 
-    v.addEventListener('loadedmetadata', function () {
-        if (savedTime > 0 && savedTime < ((v.duration || 0) - 10)) {
-            try {
-                v.currentTime = savedTime;
-                log('direct play: resume from', savedTime);
-            } catch (e) {}
+    v.addEventListener('loadedmetadata', onLoadedMetadata);
+    v.addEventListener('durationchange', onDurationChange);
+    v.addEventListener('timeupdate', onTimeUpdate);
+    v.addEventListener('waiting', onWaiting);
+    v.addEventListener('playing', onPlaying);
+    v.addEventListener('canplay', onCanPlay);
+    v.addEventListener('play', onPlay);
+    v.addEventListener('pause', onPause);
+    v.addEventListener('ended', onEnded);
+    v.addEventListener('error', onError);
+
+    try {
+        v.src = url;
+        v.load();
+    } catch (e) {
+        log('direct play set src error', e);
+    }
+
+    try {
+        var p = v.play();
+
+        if (p && typeof p.catch === 'function') {
+            p.catch(handlePlayError);
         }
-    });
-
-    v.addEventListener('timeupdate', function () {
-        saveTimeline(false);
-    });
-
-    v.addEventListener('ended', function () {
-        saveTimeline(true);
-        close();
-    });
-
-    v.src = url;
-    v.load();
-
-    var p = v.play();
-
-    if (p && typeof p.catch === 'function') {
-        p.catch(function (err) {
-            log('direct play error:', err && err.name, err && err.message);
-            Lampa.Noty.show('Rezka Direct: ' + (err && err.name ? err.name : 'play error'));
-        });
+    } catch (e) {
+        handlePlayError(e);
     }
 
     rezkaDirectState.close = close;
+
+    showUI(true);
+    refreshCenter();
+    updateProgress();
 
     log('direct play started', {
         url: url,
