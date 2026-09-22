@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v5.2.2
+HDREZKA for Lampa/Luxo — v5.2.3
 */
 (function () {
 'use strict';
@@ -27,6 +27,20 @@ function rezkaDirectEnsureCss() {
     for (var oi = 0; oi < oldIds.length; oi++) {
         var oldEl = document.getElementById(oldIds[oi]);
         if (oldEl && oldEl.parentNode) oldEl.parentNode.removeChild(oldEl);
+    }
+        if (!document.getElementById('rezka-direct-css-v5')) {
+        var css5 = '' +
+            '.rd-modal__box--confirm{min-width:560px;text-align:center;}' +
+            '.rd-modal__title--confirm{margin-bottom:26px;font-size:32px;}' +
+            '.rd-modal__row{display:-webkit-flex;display:flex;-webkit-justify-content:center;justify-content:center;gap:18px;}' +
+            '.rd-modal__row .rd-modal__item{margin-bottom:0;padding:16px 46px;border-radius:999px;background:rgba(255,255,255,.10);}' +
+            '.rd-modal__row .rd-modal__item.focus{background:rgba(255,255,255,.24);box-shadow:0 0 0 3px #fff,0 10px 30px rgba(0,0,0,.45);-webkit-transform:scale(1.06);transform:scale(1.06);}';
+        var st5 = document.createElement('style');
+        st5.id = 'rezka-direct-css-v5';
+        try { st5.appendChild(document.createTextNode(css5)); } catch (e5) { st5.text = css5; }
+        var head5 = document.getElementsByTagName('head')[0];
+        if (head5) head5.appendChild(st5);
+        else if (document.body) document.body.appendChild(st5);
     }
     if (document.getElementById('rezka-direct-css-v4')) return;
 
@@ -607,10 +621,10 @@ function rezkaDirectPlay(url, meta) {
         confirmOpen = true;
         confirmIdx = 1;
         try { v.pause(); } catch (e) {}
-        $confirm = $('<div class="rd-modal"><div class="rd-modal__box"><div class="rd-modal__title">Вы точно хотите прекратить просмотр?</div></div></div>');
-        var $box = $confirm.find('.rd-modal__box');
-        $box.append($('<div class="rd-modal__item"></div>').text('Да, выйти'));
-        $box.append($('<div class="rd-modal__item"></div>').text('Нет, продолжить'));
+        $confirm = $('<div class="rd-modal"><div class="rd-modal__box rd-modal__box--confirm"><div class="rd-modal__title rd-modal__title--confirm">Вы точно хотите выйти?</div><div class="rd-modal__row"></div></div></div>');
+        var $row = $confirm.find('.rd-modal__row');
+        $row.append($('<div class="rd-modal__item"></div>').text('Да'));
+        $row.append($('<div class="rd-modal__item"></div>').text('Нет'));
         $wrap.append($confirm);
         renderConfirm();
     }
@@ -631,8 +645,8 @@ function rezkaDirectPlay(url, meta) {
         resumePlayback();
     }
     function handleConfirmKey(e) {
-        if (isUpKey(e)) { confirmIdx = clamp(confirmIdx - 1, 0, 1); renderConfirm(); return; }
-        if (isDownKey(e)) { confirmIdx = clamp(confirmIdx + 1, 0, 1); renderConfirm(); return; }
+        if (isLeftKey(e)) { confirmIdx = clamp(confirmIdx - 1, 0, 1); renderConfirm(); return; }
+        if (isRightKey(e)) { confirmIdx = clamp(confirmIdx + 1, 0, 1); renderConfirm(); return; }
         // остальные клавиши поглощаются модалкой
     }
     function pickQuality(label) {
@@ -3170,7 +3184,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '5.2.2',
+version: '5.2.3',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
