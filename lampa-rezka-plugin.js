@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v5.2.3
+HDREZKA for Lampa/Luxo — v5.3.0
 */
 (function () {
 'use strict';
@@ -236,6 +236,7 @@ function rezkaDirectPlay(url, meta) {
     var controlsOn = false;
     var modalOpen = false, modalItems = [], modalIdx = 0;
     var confirmOpen = false, confirmIdx = 1, $confirm = null;
+    var modalMode = 'quality', epBusy = false;
 
     // курсор таймлайна
     var cursorActive = false, cursorMoved = false, cursorTime = 0;
@@ -254,7 +255,8 @@ function rezkaDirectPlay(url, meta) {
     var ICON_REW = '<svg viewBox="0 0 24 24"><path d="M11 18V6l-8.5 6L11 18zm.5-6 8.5 6V6l-8.5 6z"/></svg>';
     var ICON_FWD = '<svg viewBox="0 0 24 24"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/></svg>';
     var ICON_QUAL = '<svg viewBox="0 0 24 24"><path d="M4 8h10V6H4v2zm12 0h4V6h-4v2zM4 18h4v-2H4v2zm6 0h10v-2H10v2z"/><circle cx="16" cy="7" r="2.4"/><circle cx="8" cy="17" r="2.4"/></svg>';
-
+    var ICON_EPS = '<svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/></svg>';
+    
     var $wrap = $('<div class="rezka-direct"></div>');
 
     var v = document.createElement('video');
@@ -266,13 +268,17 @@ function rezkaDirectPlay(url, meta) {
     v.muted = false;
 
     var titleText = (meta && meta.title) || (meta && meta._card && meta._card.title) || 'Rezka';
-    var subParts = [];
-    if (meta && meta.voice) subParts.push(meta.voice);
-    if (meta && meta.season && meta.episode) subParts.push('Серия ' + meta.episode + ' сезон ' + meta.season);
-
     var $top = $('<div class="rezka-direct-top"></div>');
     $top.append($('<div class="rezka-direct-title"></div>').text(titleText));
-    if (subParts.length) $top.append($('<div class="rezka-direct-sub"></div>').text(subParts.join(' • ')));
+    var $sub = $('<div class="rezka-direct-sub"></div>');
+    $top.append($sub);
+    function updateSub() {
+        var s = [];
+        if (meta && meta.voice) s.push(meta.voice);
+        if (meta && meta.season && meta.episode) s.push('Серия ' + meta.episode + ' сезон ' + meta.season);
+        $sub.text(s.join(' • '));
+    }
+    updateSub();
 
     // --- контролы ---
     var $controls = $('<div class="rezka-direct-controls"></div>');
@@ -284,14 +290,31 @@ function rezkaDirectPlay(url, meta) {
     btns.push({ el: $playBtn, act: 'play' });
     $btnRow.append($playBtn);
 
+    function epLabel(epId) {
+        var list = (meta && meta._episodes) || [];
+        for (var i = 0; i < list.length; i++) {
+            if (String(list[i].id) === String(epId)) return list[i].title;
+        }
+        return 'Серия ' + epId;
+    }
+    var $epBtn = null;
+    if (meta && meta._episodes && meta._episodes.length > 1) {
+        $epBtn = $('<div class="rd-btn"></div>');
+        $epBtn.html(ICON_EPS + '<span></span>');
+        $epBtn.find('span').text(epLabel(meta.episode));
+        btns.push({ el: $epBtn, act: 'episodes' });
+        $btnRow.append($epBtn);
+    }
     var $qBtn = null;
     if (Object.keys(qMap).length > 0) {
-        $qBtn = $('<div class="rd-btn rd-btn--right"></div>');
+        $qBtn = $('<div class="rd-btn"></div>');
         $qBtn.html(ICON_QUAL + '<span></span>');
         $qBtn.find('span').text(qLabel || 'Качество');
         btns.push({ el: $qBtn, act: 'quality' });
         $btnRow.append($qBtn);
     }
+    if ($epBtn) $epBtn.addClass('rd-btn--right');
+    else if ($qBtn) $qBtn.addClass('rd-btn--right');
 
     var $tlRow = $('<div class="rezka-direct-timeline"></div>');
     var $tCur = $('<div class="rd-time">--:--</div>');
@@ -590,6 +613,7 @@ function rezkaDirectPlay(url, meta) {
         modalIdx = 0;
         for (var i = 0; i < keys.length; i++) if (keys[i] === qLabel) modalIdx = i;
         modalOpen = true;
+        modalMode = 'quality';
         $modal = $('<div class="rd-modal"><div class="rd-modal__box"><div class="rd-modal__title">Качество</div></div></div>');
         var $box = $modal.find('.rd-modal__box');
         for (var j = 0; j < keys.length; j++) {
@@ -675,6 +699,96 @@ function rezkaDirectPlay(url, meta) {
         log('quality switch ->', label, newUrl);
         refreshCenter();
         showControls(true);
+    }
+    
+    function nextEpisode() {
+        var list = (meta && meta._episodes) || [];
+        for (var i = 0; i < list.length; i++) {
+            if (String(list[i].id) === String(meta.episode)) return list[i + 1] || null;
+        }
+        return list.length ? list[0] : null;
+    }
+    function openEpisodes() {
+        if (!meta || !meta._episodes || !meta._episodes.length) { showHint('Список серий недоступен'); return; }
+        modalMode = 'episodes';
+        modalItems = meta._episodes;
+        modalIdx = 0;
+        for (var i = 0; i < modalItems.length; i++) {
+            if (String(modalItems[i].id) === String(meta.episode)) modalIdx = i;
+        }
+        modalOpen = true;
+        $modal = $('<div class="rd-modal"><div class="rd-modal__box"><div class="rd-modal__title">Серии' + (meta.season ? ' (' + meta.season + ' сезон)' : '') + '</div></div></div>');
+        var $box = $modal.find('.rd-modal__box');
+        for (var j = 0; j < modalItems.length; j++) {
+            var p = 0;
+            try {
+                var vw = Lampa.Timeline.view(hashFor({ url: meta.url, season: meta.season, episode: modalItems[j].id }));
+                if (vw && vw.percent) p = vw.percent;
+            } catch (e) {}
+            var cur = String(modalItems[j].id) === String(meta.episode);
+            var label = (cur ? '▶ ' : '') + (modalItems[j].title || ('Серия ' + modalItems[j].id)) + (p ? ' — ' + p + '%' : '');
+            $box.append($('<div class="rd-modal__item"></div>').text(label));
+        }
+        $wrap.append($modal);
+        renderModal();
+        showControls(false);
+    }
+    function switchEpisode(epId, autoplay) {
+        if (closed || epBusy) return;
+        if (!meta || typeof meta._resolveStream !== 'function') return;
+        epBusy = true;
+        var wasPlaying = !v.paused;
+        loading = true;
+        refreshCenter();
+        showHint('Загрузка серии ' + epId + '…');
+        meta._resolveStream(meta.season, epId, function (quality) {
+            if (closed) return;
+            epBusy = false;
+            var map = quality || {};
+            var url = pickInitial(map);
+            if (!url) {
+                loading = false;
+                refreshCenter();
+                try { Lampa.Noty.show('Rezka: нет ссылки на серию ' + epId, { style: 'error' }); } catch (e) {}
+                if (autoplay) close(); else showControls(true);
+                return;
+            }
+            qMap = map;
+            qLabel = labelOfUrl(map, url) || qLabel;
+            if ($qBtn) $qBtn.find('span').text(qLabel || 'Качество');
+            meta.episode = String(epId);
+            hash = hashFor(meta);
+            meta.hash = hash;
+            pendingSeek = rezkaTimelineGetTime(hash);
+            currentUrl = url;
+            if ($epBtn) $epBtn.find('span').text(epLabel(epId));
+            updateSub();
+            try { histPush(meta); } catch (e) {}
+            destroyPreview();
+            try {
+                v.src = url;
+                v.load();
+                if (wasPlaying || autoplay) {
+                    var p = v.play();
+                    if (p && typeof p.catch === 'function') p.catch(handlePlayError);
+                }
+            } catch (e) {
+                log('episode switch error', e);
+            }
+            loading = true;
+            refreshCenter();
+            showControls(true);
+            log('episode switch ->', epId, url);
+            var nx = nextEpisode();
+            if (nx) { try { meta._resolveStream(meta.season, nx.id, function () {}, function () {}); } catch (e2) {} }
+        }, function (e) {
+            if (closed) return;
+            epBusy = false;
+            loading = false;
+            refreshCenter();
+            try { Lampa.Noty.show('Rezka: ' + ((e && e.message) || 'нет ссылки на серию'), { style: 'error' }); } catch (e2) {}
+            if (autoplay) close(); else showControls(true);
+        });
     }
 
     // ---------- play/pause ----------
@@ -807,6 +921,7 @@ function rezkaDirectPlay(url, meta) {
             var act = btns[btnIdx] ? btns[btnIdx].act : 'play';
             if (act === 'play') togglePlay();
             else if (act === 'quality') openQuality();
+            else if (act === 'episodes') openEpisodes();
             return;
         }
         if (cursorMoved) applyCursor();
@@ -818,7 +933,16 @@ function rezkaDirectPlay(url, meta) {
         if (now - lastSelectAct < 250) return;
         lastSelectAct = now;
         if (confirmOpen) { confirmApply(); return; }
-        if (modalOpen) { pickQuality(modalItems[modalIdx]); return; }
+        if (modalOpen) {
+            if (modalMode === 'episodes') {
+                var it = modalItems[modalIdx];
+                closeModal();
+                if (it) switchEpisode(it.id, false);
+                return;
+            }
+            pickQuality(modalItems[modalIdx]);
+            return;
+        }
         activate();
     }
 
@@ -919,7 +1043,12 @@ function rezkaDirectPlay(url, meta) {
     var onCanPlay = function () { try { if (v.readyState >= 3) loading = false; } catch (e) {} refreshCenter(); };
     var onPlay = function () { started = true; syncPlayIcon(); if (!cursorActive && !cursorMoved) flashCenter('play'); maybeAutoHide(); };
     var onPause = function () { saveTimeline(false); syncPlayIcon(); refreshCenter(); showControls(false); };
-    var onEnded = function () { saveTimeline(true); close(); };
+    var onEnded = function () {
+        saveTimeline(true);
+        var nx = (meta && meta._episodes && meta._episodes.length) ? nextEpisode() : null;
+        if (nx) { switchEpisode(nx.id, true); return; }
+        close();
+    };
     var onError = function () {
         if (closed) return;
         errorMode = true; loading = false; started = true;
@@ -2411,11 +2540,27 @@ function prefetchTargetStream() {
         prefetchStream(card, curVoice().id, seasonId, ep.id);
     }
 }
+function attachPlaylist(meta2) {
+    if (!card.isSerial || !episodes.length) return meta2;
+    meta2._episodes = episodes.map(function (e) {
+        return { id: String(e.id), title: e.title || ('Серия ' + e.id) };
+    });
+    meta2._seasonId = seasonId;
+    meta2._resolveStream = function (season, episode, cb, fail) {
+        var cached = streamCacheGet(card, meta2.voice_id, season, episode);
+        if (cached) { cb(cached); return; }
+        apiStream(card, meta2.voice_id, season, episode, function (q) {
+            streamCacheSet(card, meta2.voice_id, season, episode, q);
+            cb(q);
+        }, fail);
+    };
+    return meta2;
+}
 function playEpisode(ep) {
-    var meta2 = baseMeta();
-    meta2.episode = ep.id;
-    meta2.hash = hashFor(meta2);
-    playMeta(meta2);
+var meta2 = baseMeta();
+meta2.episode = ep.id;
+meta2.hash = hashFor(meta2);
+playMeta(attachPlaylist(meta2));
 }
 
 function playMovie() {
@@ -3184,7 +3329,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '5.2.3',
+version: '5.3.0',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
