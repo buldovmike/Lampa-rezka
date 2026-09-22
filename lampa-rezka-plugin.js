@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v5.3.2
+HDREZKA for Lampa/Luxo — v5.3.3
 */
 (function () {
 'use strict';
@@ -27,6 +27,22 @@ function rezkaDirectEnsureCss() {
     for (var oi = 0; oi < oldIds.length; oi++) {
         var oldEl = document.getElementById(oldIds[oi]);
         if (oldEl && oldEl.parentNode) oldEl.parentNode.removeChild(oldEl);
+    }
+    if (!document.getElementById('rezka-direct-css-v9')) {
+        var css9 = '' +
+            '.rd-modal__box--side .rd-modal__list{padding:2px 8px 14px;}' +
+            '.rd-modal__list .rd-modal__item--ep.focus{background:rgba(255,255,255,.14);box-shadow:inset 0 0 0 3px #fff;-webkit-transform:none;transform:none;}' +
+            '.rd-modal__list .rd-modal__item--ep.current{background:rgba(255,255,255,.07);box-shadow:inset 3px 0 0 #5eead4;}' +
+            '.rd-modal__list .rd-modal__item--ep.current.focus{background:rgba(255,255,255,.14);box-shadow:inset 0 0 0 3px #fff,inset 3px 0 0 #5eead4;}' +
+            '.rd-ep__title--plain{color:rgba(255,255,255,.85);}' +
+            '.rd-modal__box--side .rd-modal__title{margin-bottom:8px;}' +
+            '.rd-modal__count{margin:0 0 14px;font-size:20px;font-weight:500;color:rgba(255,255,255,.55);}';
+        var st9 = document.createElement('style');
+        st9.id = 'rezka-direct-css-v9';
+        try { st9.appendChild(document.createTextNode(css9)); } catch (e9) { st9.text = css9; }
+        var head9 = document.getElementsByTagName('head')[0];
+        if (head9) head9.appendChild(st9);
+        else if (document.body) document.body.appendChild(st9);
     }
     if (document.getElementById('rezka-direct-css-v7')) return;
 
@@ -206,6 +222,8 @@ function rezkaDirectPlay(url, meta) {
     var hash = meta && meta.hash ? meta.hash : '';
     var savedTime = rezkaTimelineGetTime(hash);
     var pendingSeek = savedTime > 0 ? savedTime : 0;
+    var initialAsk = pendingSeek > 90;
+    var resumeDecided = !initialAsk;
 
     var closed = false;
     var lastSave = 0;
@@ -227,6 +245,7 @@ function rezkaDirectPlay(url, meta) {
     var controlsOn = false;
     var modalOpen = false, modalItems = [], modalIdx = 0;
     var confirmOpen = false, confirmIdx = 1, $confirm = null;
+    var resumeOpen = false, resumeIdx = 0, $resume = null;
     var modalMode = 'quality', epBusy = false;
 
     // курсор таймлайна
@@ -373,19 +392,19 @@ function rezkaDirectPlay(url, meta) {
         $top.addClass('visible');
         $controls.addClass('visible');
         if (uiTimer) { clearTimeout(uiTimer); uiTimer = null; }
-        if (autoHide && started && !v.paused && !loading && !modalOpen && !confirmOpen) {
+        if (autoHide && started && !v.paused && !loading && !modalOpen && !confirmOpen && !resumeOpen) {
             uiTimer = setTimeout(hideControls, 4000);
         }
     }
     function maybeAutoHide() {
         if (closed || !controlsOn) return;
         if (uiTimer) { clearTimeout(uiTimer); uiTimer = null; }
-        if (started && !v.paused && !loading && !modalOpen && !confirmOpen) {
+        if (started && !v.paused && !loading && !modalOpen && !confirmOpen && !resumeOpen) {
             uiTimer = setTimeout(hideControls, 4000);
         }
     }
     function hideControls() {
-        if (closed || !v || v.paused || loading || modalOpen || confirmOpen) return;
+        if (closed || !v || v.paused || loading || modalOpen || confirmOpen || resumeOpen) return;
         if (cursorMoved) resetCursor();
         forceHideControls();
     }
@@ -562,7 +581,7 @@ function rezkaDirectPlay(url, meta) {
         showControls(true);
     }
     function wheelHandler(e) {
-        if (closed || modalOpen) return;
+        if (closed || modalOpen || confirmOpen || resumeOpen) return;
         var dx = 0;
         try {
             if (typeof e.deltaX === 'number' && e.deltaX !== 0) dx = e.deltaX;
@@ -675,6 +694,39 @@ function rezkaDirectPlay(url, meta) {
         if (isRightKey(e)) { confirmIdx = clamp(confirmIdx + 1, 0, 1); renderConfirm(); return; }
         // остальные клавиши поглощаются модалкой
     }
+    function openResume() {
+        if (closed || resumeOpen) return;
+        resumeOpen = true;
+        resumeIdx = 0;
+        $resume = $('<div class="rd-modal"><div class="rd-modal__box rd-modal__box--confirm"><div class="rd-modal__title rd-modal__title--confirm">Продолжить с ' + fmt(pendingSeek) + '?</div><div class="rd-modal__row"></div></div></div>');
+        var $row = $resume.find('.rd-modal__row');
+        $row.append($('<div class="rd-modal__item"></div>').text('Продолжить'));
+        $row.append($('<div class="rd-modal__item"></div>').text('Начать сначала'));
+        $wrap.append($resume);
+        renderResume();
+    }
+    function renderResume() {
+        if (!$resume) return;
+        var items = $resume.find('.rd-modal__item');
+        items.removeClass('focus');
+        items.eq(resumeIdx).addClass('focus');
+    }
+    function closeResume() {
+        resumeOpen = false;
+        if ($resume) { $resume.remove(); $resume = null; }
+    }
+    function resumeApply() {
+        var cont = resumeIdx === 0;
+        closeResume();
+        resumeDecided = true;
+        if (cont) trySeek();
+        else pendingSeek = 0;
+        showControls(true);
+    }
+    function handleResumeKey(e) {
+        if (isLeftKey(e)) { resumeIdx = clamp(resumeIdx - 1, 0, 1); renderResume(); return; }
+        if (isRightKey(e)) { resumeIdx = clamp(resumeIdx + 1, 0, 1); renderResume(); return; }
+    }
     function pickQuality(label) {
         var newUrl = qMap[label];
         closeModal();
@@ -687,6 +739,7 @@ function rezkaDirectPlay(url, meta) {
         currentUrl = newUrl;
         loading = true;
         pendingSeek = keepPos;
+        resumeDecided = true;
         destroyPreview();
         try {
             v.src = newUrl;
@@ -747,12 +800,14 @@ function rezkaDirectPlay(url, meta) {
             if (String(modalItems[i].id) === String(meta.episode)) modalIdx = i;
         }
         modalOpen = true;
-        $modal = $('<div class="rd-modal rd-modal--side"><div class="rd-modal__box rd-modal__box--side"><div class="rd-modal__title">Серии' + (meta.season ? ' (' + meta.season + ' сезон)' : '') + '</div><div class="rd-modal__list"></div></div></div>');
+        $modal = $('<div class="rd-modal rd-modal--side"><div class="rd-modal__box rd-modal__box--side"><div class="rd-modal__title">Серии</div><div class="rd-modal__count"></div><div class="rd-modal__list"></div></div></div>');
+        $modal.find('.rd-modal__count').text((meta.season ? 'Сезон ' + meta.season : 'Сезон не указан') + ' · ' + modalItems.length + ' сер.');
         var $list = $modal.find('.rd-modal__list');
         for (var j = 0; j < modalItems.length; j++) {
             var it = modalItems[j];
             var p = epPercent(it.id);
             var cur = String(it.id) === String(meta.episode);
+            var hasTitle = !!it.title && it.title !== ('Серия ' + it.id);
             var sub = [];
             if (p) sub.push(p + '%');
             var fl = futureLabel(it.date);
@@ -761,8 +816,12 @@ function rezkaDirectPlay(url, meta) {
             var $it = $('<div class="rd-modal__item rd-modal__item--ep"></div>');
             if (cur) $it.addClass('current');
             var $main = $('<div class="rd-ep__main"></div>');
-            $main.append($('<span class="rd-ep__num"></span>').text(it.id));
-            $main.append($('<div class="rd-ep__title"></div>').text(it.title || ('Серия ' + it.id)));
+            if (hasTitle) {
+                $main.append($('<span class="rd-ep__num"></span>').text(it.id));
+                $main.append($('<div class="rd-ep__title"></div>').text(it.title));
+            } else {
+                $main.append($('<div class="rd-ep__title rd-ep__title--plain"></div>').text('Серия ' + it.id));
+            }
             $it.append($main);
             if (sub.length) $it.append($('<div class="rd-modal__itemsub"></div>').text(sub.join(' · ')));
             if (p > 0) {
@@ -803,6 +862,7 @@ function rezkaDirectPlay(url, meta) {
             hash = hashFor(meta);
             meta.hash = hash;
             pendingSeek = rezkaTimelineGetTime(hash);
+            resumeDecided = true;
             currentUrl = url;
             if ($epBtn) $epBtn.find('span').text(epLabel(epId));
             updateSub();
@@ -895,6 +955,7 @@ function rezkaDirectPlay(url, meta) {
     // ---------- resume из pendingSeek ----------
     function trySeek() {
         if (!pendingSeek || closed) return;
+        if (!resumeDecided) return;
         var d = getDuration();
         if (d > 0) {
             if (pendingSeek < d - 10) {
@@ -917,6 +978,7 @@ function rezkaDirectPlay(url, meta) {
         if (closed || !suspended) return;
         if (confirmOpen) { suspended = false; return; }
         suspended = false;
+        resumeDecided = true;
         var target = suspendPos;
         loading = true;
         refreshCenter();
@@ -975,6 +1037,7 @@ function rezkaDirectPlay(url, meta) {
         var now = Date.now();
         if (now - lastSelectAct < 250) return;
         lastSelectAct = now;
+        if (resumeOpen) { resumeApply(); return; }
         if (confirmOpen) { confirmApply(); return; }
         if (modalOpen) {
             if (modalMode === 'episodes') {
@@ -1001,6 +1064,7 @@ function rezkaDirectPlay(url, meta) {
         try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
 
         if (isBackKey(e)) {
+            if (resumeOpen) { closeResume(); resumeDecided = true; trySeek(); showControls(true); return; }
             if (confirmOpen) { closeConfirm(); resumePlayback(); return; }
             if (modalOpen) { closeModal(); showControls(true); return; }
             if (cursorMoved) { resetCursor(); showControls(true); return; }
@@ -1031,6 +1095,7 @@ function rezkaDirectPlay(url, meta) {
         }
 
         if (confirmOpen) { handleConfirmKey(e); return; }
+        if (resumeOpen) { handleResumeKey(e); return; }
         if (isPlayPauseKey(e)) { if (!e.repeat) togglePlay(); return; }
 
         if (modalOpen) { handleModalKey(e); return; }
@@ -1138,6 +1203,7 @@ function rezkaDirectPlay(url, meta) {
         try { destroyPreview(); } catch (e) {}
         try { closeModal(); } catch (e) {}
         try { closeConfirm(); } catch (e) {}
+        try { closeResume(); } catch (e) {}
         try { v.pause(); } catch (e) {}
         try { v.removeAttribute('src'); v.load(); } catch (e) {}
         try { $wrap.remove(); } catch (e) {}
@@ -1178,7 +1244,7 @@ function rezkaDirectPlay(url, meta) {
     updateTimeline();
     refreshCenter();
     showControls(true);
-
+    if (initialAsk && !closed) openResume();
     log('direct play started', { url: url, hash: hash, savedTime: savedTime, qualities: Object.keys(qMap) });
 }
 
@@ -1754,6 +1820,44 @@ function scrapeEpisodesFromHtml(html) {
     return eps;
 }
 
+function scrapeScheduleFromHtml(html) {
+    var out = {};
+    if (!html) return out;
+    try {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        nodeList('tr', doc).forEach(function (tr) {
+            var txt = cleanTitle(stripTags(tr.textContent || ''));
+            if (!txt) return;
+            var m = txt.match(/^(\d+)\s*сезон\s*(\d+)\s*серия/i);
+            if (!m) return;
+            var dm = txt.match(/\d{1,2}\s*[а-яa-z]+\s*\d{4}|\d{2}\.\d{2}\.\d{4}/i);
+            var title = cleanTitle(txt.replace(m[0], '').replace(/[✓✔]/g, ' ').replace(/\s+/g, ' ').trim());
+            if (!title || title.length > 120) title = '';
+            var key = m[1] + '|' + m[2];
+            if (!out[key]) out[key] = { title: title, date: dm ? dm[0] : '' };
+            else {
+                if (!out[key].title && title) out[key].title = title;
+                if (!out[key].date && dm) out[key].date = dm[0];
+            }
+        });
+    } catch (e) {}
+    return out;
+}
+function mergeSchedule(card, sd) {
+    if (!sd || !sd.episodes) return sd;
+    var sched = scrapeScheduleFromHtml((card && card._html) || '');
+    if (!Object.keys(sched).length) return sd;
+    for (var sid in sd.episodes) {
+        for (var i = 0; i < sd.episodes[sid].length; i++) {
+            var e = sd.episodes[sid][i];
+            var s = sched[sid + '|' + e.id];
+            if (!s) continue;
+            if (!e.title || e.title === 'Серия ' + e.id) e.title = s.title || e.title;
+            if (!e.date) e.date = s.date || '';
+        }
+    }
+    return sd;
+}
 function parseQualityList(raw) {
 var map = {};
 if (!raw) return map;
@@ -1869,7 +1973,9 @@ if (stGet('email') && stGet('password')) apiLogin(function (ok) { cb(ok); });
 else cb(true);
 }
 function apiSeasonData(card, voiceId, cb, fail) {
-card._sd = card._sd || {};
+    var _cbRaw = cb;
+    cb = function (sd) { _cbRaw(mergeSchedule(card, sd)); };
+    card._sd = card._sd || {};
 if (card._sd[voiceId]) { cb(card._sd[voiceId]); return; }
 function fromHtml() {
 var eps = scrapeEpisodesFromHtml(card._html || '');
@@ -3390,7 +3496,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '5.3.2',
+version: '5.3.3',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
