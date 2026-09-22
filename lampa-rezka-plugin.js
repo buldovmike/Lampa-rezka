@@ -206,6 +206,7 @@ function rezkaDirectPlay(url, meta) {
     var lastSave = 0;
     var uiTimer = null, errTimer = null, hintTimer = null, flashTimer = null;
     var sideTimerL = null, sideTimerR = null, shortSeekTimer = null;
+    var selectFallbackTimer = null;
 
     var loading = true, started = false, mutedAutoplay = false, errorMode = false, flashActive = false;
     var suspended = false, suspendPos = 0;
@@ -216,7 +217,7 @@ function rezkaDirectPlay(url, meta) {
     for (var qk in qMap) { if (qMap[qk] === url) qLabel = qk; }
 
     // фокус-модель
-    var focusZone = 'buttons';   // 'buttons' | 'timeline'
+    var focusZone = 'buttons';
     var btnIdx = 0;
     var controlsOn = false;
     var modalOpen = false, modalItems = [], modalIdx = 0;
@@ -227,11 +228,10 @@ function rezkaDirectPlay(url, meta) {
 
     // быстрая перемотка при скрытых контролах
     var shortSeekCount = 0, shortSeekAt = 0;
-    var lastSelectAt = 0, lastPpAt = 0;
-    var pvReady = false, pvDrawOk = false, pvSeeking = false, pvFailTimer = null;
 
-    // превью-кадры
-    var pvVideo = null, pvCtx = null, pvTimer = null, pvWantMeta = false, pvEnabled = true;
+    // select edge-state (keyup-активация с fallback)
+    var selectHeld = false, selectConsumed = false, swallowSelectUp = false, lastSelectAct = 0;
+    var lastPpAt = 0;
 
     var ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
     var ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>';
@@ -282,13 +282,11 @@ function rezkaDirectPlay(url, meta) {
     var $tCur = $('<div class="rd-time">--:--</div>');
     var $tTotal = $('<div class="rd-time rd-time--total">--:--</div>');
     var $track = $('<div class="rd-track"><div class="rd-fill"></div><div class="rd-cursor"></div>' +
-        '<div class="rd-preview"><canvas width="212" height="120"></canvas><div class="rd-preview__time">--:--</div></div></div>');
+        '<div class="rd-preview"><div class="rd-preview__time">--:--</div></div></div>');
     var $fill = $track.find('.rd-fill');
     var $cursor = $track.find('.rd-cursor');
     var $preview = $track.find('.rd-preview');
     var $pvTime = $preview.find('.rd-preview__time');
-    var pvCanvas = $preview.find('canvas')[0];
-    try { pvCtx = pvCanvas ? pvCanvas.getContext('2d') : null; } catch (e) { pvCtx = null; }
 
     $tlRow.append($tCur).append($track).append($tTotal);
     $controls.append($btnRow).append($tlRow);
@@ -363,7 +361,7 @@ function rezkaDirectPlay(url, meta) {
         controlsOn = false;
         $top.removeClass('visible');
         $controls.removeClass('visible');
-        destroyPreview();
+        hidePreview();
     }
     function renderFocus() {
         if (closed) return;
@@ -415,112 +413,19 @@ function rezkaDirectPlay(url, meta) {
         }
     }
 
-    // ---------- превью-кадры ----------
-    function ensurePreview() {
-        if (pvVideo || !pvEnabled || closed) return;
-        try {
-            pvVideo = document.createElement('video');
-            pvVideo.muted = true;
-            pvVideo.preload = 'auto';
-            pvVideo.style.position = 'absolute';
-            pvVideo.style.width = '2px';
-            pvVideo.style.height = '2px';
-            pvVideo.style.opacity = '0';
-            pvVideo.style.left = '-10px';
-            pvVideo.addEventListener('loadedmetadata', onPvMeta);
-            pvVideo.addEventListener('canplay', onPvCanPlay);
-            pvVideo.addEventListener('seeked', onPvSeeked);
-            pvVideo.addEventListener('error', onPvError);
-            pvVideo.src = currentUrl;
-            $wrap.append(pvVideo);
-        } catch (e) {
-            pvEnabled = false;
-            pvVideo = null;
-        }
-    }
-    function doPvSeek(t) {
-        if (!pvVideo) return;
-        if (!pvReady) { pvWantMeta = true; return; }
-        pvSeeking = true;
-        try { pvVideo.currentTime = t; } catch (e) { pvSeeking = false; }
-    }
-    function onPvMeta() {
-        pvReady = true;
-        if (pvWantMeta && pvVideo) {
-            pvWantMeta = false;
-            doPvSeek(cursorTime);
-        }
-    }
-    function onPvCanPlay() {
-        if (pvSeeking) tryDraw();
-    }
-    function onPvSeeked() {
-        tryDraw();
-    }
-    function tryDraw() {
-        if (!pvVideo || !pvCtx) return;
-        try {
-            if (pvVideo.readyState < 2) return;
-            pvCtx.drawImage(pvVideo, 0, 0, 212, 120);
-            pvDrawOk = true;
-            pvSeeking = false;
-            $preview.addClass('visible');
-            if (pvFailTimer) { clearTimeout(pvFailTimer); pvFailTimer = null; }
-        } catch (e) {
-            pvEnabled = false;
-            hidePreview();
-        }
-    }
-    function onPvError() {
-        pvEnabled = false;
-        hidePreview();
-    }
+    // ---------- превью: только время-чип (без canvas и второго видео) ----------
     function schedulePreview(t) {
-        if (!pvEnabled) return;
+        if (closed) return;
         var d = getDuration();
         $pvTime.text(fmt(t));
         if (d > 0) $preview.css('left', clamp((t / d) * 100, 0, 100) + '%');
-        if (pvDrawOk) $preview.addClass('visible');
-        if (pvTimer) clearTimeout(pvTimer);
-        pvTimer = setTimeout(function () {
-            if (closed) return;
-            ensurePreview();
-            doPvSeek(t);
-            if (!pvFailTimer && !pvDrawOk) {
-                pvFailTimer = setTimeout(function () {
-                    if (!pvDrawOk) {
-                        pvEnabled = false;
-                        hidePreview();
-                        log('preview: disabled (no decodable frame)');
-                    }
-                }, 3000);
-            }
-        }, 260);
+        $preview.addClass('visible');
     }
     function hidePreview() {
-        if (pvTimer) { clearTimeout(pvTimer); pvTimer = null; }
         $preview.removeClass('visible');
     }
     function destroyPreview() {
         hidePreview();
-        if (pvFailTimer) { clearTimeout(pvFailTimer); pvFailTimer = null; }
-        pvReady = false;
-        pvDrawOk = false;
-        pvSeeking = false;
-        pvWantMeta = false;
-        if (pvVideo) {
-            try {
-                pvVideo.removeEventListener('loadedmetadata', onPvMeta);
-                pvVideo.removeEventListener('canplay', onPvCanPlay);
-                pvVideo.removeEventListener('seeked', onPvSeeked);
-                pvVideo.removeEventListener('error', onPvError);
-                pvVideo.pause();
-                pvVideo.removeAttribute('src');
-                pvVideo.load();
-                if (pvVideo.parentNode) pvVideo.parentNode.removeChild(pvVideo);
-            } catch (e) {}
-            pvVideo = null;
-        }
     }
 
     // ---------- центр / подсказки / боковые ----------
@@ -671,6 +576,7 @@ function rezkaDirectPlay(url, meta) {
         }
         $wrap.append($modal);
         renderModal();
+        showControls(false);
     }
     function renderModal() {
         if (!$modal) return;
@@ -690,11 +596,10 @@ function rezkaDirectPlay(url, meta) {
         var wasPlaying = !v.paused;
         qLabel = label;
         if ($qBtn) $qBtn.find('span').text(label);
-        try { stSet('quality', label); } catch (e) {}
+        // сессионный override: глобальную настройку 'quality' здесь НЕ меняем
         currentUrl = newUrl;
         loading = true;
         pendingSeek = keepPos;
-        log('quality switch ->', label, newUrl);
         destroyPreview();
         try {
             v.src = newUrl;
@@ -706,6 +611,7 @@ function rezkaDirectPlay(url, meta) {
         } catch (e) {
             log('quality switch error', e);
         }
+        log('quality switch ->', label, newUrl);
         refreshCenter();
         showControls(true);
     }
@@ -844,38 +750,63 @@ function rezkaDirectPlay(url, meta) {
         if (cursorMoved) applyCursor();
         else togglePlay();
     }
+    function selectEdgeActivate() {
+        if (closed) return;
+        var now = Date.now();
+        if (now - lastSelectAct < 250) return;
+        lastSelectAct = now;
+        if (modalOpen) { pickQuality(modalItems[modalIdx]); return; }
+        activate();
+    }
 
     function handleModalKey(e) {
-        if (isBackKey(e)) { closeModal(); showControls(false); return; }
         if (isUpKey(e)) { modalIdx = clamp(modalIdx - 1, 0, modalItems.length - 1); renderModal(); return; }
         if (isDownKey(e)) { modalIdx = clamp(modalIdx + 1, 0, modalItems.length - 1); renderModal(); return; }
-        if (isSelectKey(e)) { pickQuality(modalItems[modalIdx]); return; }
     }
 
     function keyHandler(e) {
         if (closed) return;
-        // log('direct key', e.keyCode, e.key);
+        // log('direct key', e.keyCode, e.key, e.repeat);
 
         try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
 
-        if (isSelectKey(e)) {
-            var nowS = Date.now();
-            if (e.repeat || nowS - lastSelectAt < 400) return;
-            lastSelectAt = nowS;
-        }
-        if (modalOpen) { handleModalKey(e); return; }
-
         if (isBackKey(e)) {
+            if (modalOpen) { closeModal(); showControls(false); return; }
             if (cursorMoved) { resetCursor(); showControls(false); }
             else close();
             return;
         }
+
+        // Select: активация на keyup (см. keyUpHandler), здесь только edge-state
+        if (isSelectKey(e)) {
+            if (e.repeat || selectHeld) return;
+            selectHeld = true;
+            selectConsumed = false;
+            if (!controlsOn) {
+                showControls(false);
+                setZone('buttons');
+                swallowSelectUp = true;
+            } else {
+                swallowSelectUp = false;
+            }
+            if (selectFallbackTimer) clearTimeout(selectFallbackTimer);
+            selectFallbackTimer = setTimeout(function () {
+                selectFallbackTimer = null;
+                if (closed || !selectHeld) return;
+                selectConsumed = true;
+                selectEdgeActivate();
+            }, 450);
+            return;
+        }
+
         if (isPlayPauseKey(e)) { if (!e.repeat) togglePlay(); return; }
+
+        if (modalOpen) { handleModalKey(e); return; }
 
         if (!controlsOn) {
             if (isLeftKey(e)) { if (e.repeat) return; quickSeek(-1); return; }
             if (isRightKey(e)) { if (e.repeat) return; quickSeek(1); return; }
-            if (isUpKey(e) || isDownKey(e) || isSelectKey(e)) {
+            if (isUpKey(e) || isDownKey(e)) {
                 showControls(false);
                 setZone('buttons');
                 return;
@@ -884,7 +815,6 @@ function rezkaDirectPlay(url, meta) {
             return;
         }
 
-        if (isSelectKey(e)) { activate(); return; }
         if (isUpKey(e)) { setZone('buttons'); return; }
         if (isDownKey(e)) { setZone('timeline'); return; }
         if (isLeftKey(e)) {
@@ -897,6 +827,17 @@ function rezkaDirectPlay(url, meta) {
             else moveCursor(1);
             return;
         }
+    }
+
+    function keyUpHandler(e) {
+        if (closed) return;
+        if (!isSelectKey(e)) return;
+        try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
+        selectHeld = false;
+        if (selectFallbackTimer) { clearTimeout(selectFallbackTimer); selectFallbackTimer = null; }
+        if (selectConsumed) { selectConsumed = false; return; }
+        if (swallowSelectUp) { swallowSelectUp = false; return; }
+        selectEdgeActivate();
     }
 
     // ---------- события видео ----------
@@ -946,12 +887,13 @@ function rezkaDirectPlay(url, meta) {
         if (closed) return;
         closed = true;
 
-        var timers = [uiTimer, errTimer, hintTimer, flashTimer, sideTimerL, sideTimerR, shortSeekTimer, pvTimer, pvFailTimer];
+        var timers = [uiTimer, errTimer, hintTimer, flashTimer, sideTimerL, sideTimerR, shortSeekTimer, selectFallbackTimer];
         for (var ti = 0; ti < timers.length; ti++) { if (timers[ti]) clearTimeout(timers[ti]); }
 
         try { saveTimeline(true); } catch (e) {}
         try { if (stopWatch) stopWatch(); } catch (e) {}
         try { document.removeEventListener('keydown', keyHandler, true); } catch (e) {}
+        try { document.removeEventListener('keyup', keyUpHandler, true); } catch (e) {}
         try { document.removeEventListener('wheel', wheelHandler, false); } catch (e) {}
         try { document.removeEventListener('mousewheel', wheelHandler, false); } catch (e) {}
         try { document.removeEventListener('visibilitychange', visHandler); } catch (e) {}
@@ -969,6 +911,7 @@ function rezkaDirectPlay(url, meta) {
 
     // ---------- старт ----------
     document.addEventListener('keydown', keyHandler, true);
+    document.addEventListener('keyup', keyUpHandler, true);
     document.addEventListener('wheel', wheelHandler, false);
     try { document.addEventListener('mousewheel', wheelHandler, false); } catch (e) {}
     document.addEventListener('visibilitychange', visHandler);
