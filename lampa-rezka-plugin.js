@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v5.3.0
+HDREZKA for Lampa/Luxo — v5.3.1
 */
 (function () {
 'use strict';
@@ -41,6 +41,22 @@ function rezkaDirectEnsureCss() {
         var head5 = document.getElementsByTagName('head')[0];
         if (head5) head5.appendChild(st5);
         else if (document.body) document.body.appendChild(st5);
+    }
+    if (!document.getElementById('rezka-direct-css-v6')) {
+        var css6 = '' +
+            '.rd-modal--side{-webkit-justify-content:flex-end;justify-content:flex-end;background:rgba(0,0,0,.45);}' +
+            '.rd-modal__box--side{width:40vw;min-width:420px;max-width:560px;height:88vh;max-height:88vh;display:-webkit-flex;display:flex;-webkit-flex-direction:column;flex-direction:column;border-radius:26px 0 0 26px;padding:30px 30px 26px;}' +
+            '.rd-modal__list{position:relative;-webkit-flex:1;flex:1;overflow-y:auto;overflow-x:hidden;margin-top:6px;}' +
+            '.rd-modal__list::-webkit-scrollbar{width:0;height:0;}' +
+            '.rd-modal__item--ep{padding:12px 22px;margin-bottom:10px;}' +
+            '.rd-modal__itemmain{font-size:26px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+            '.rd-modal__itemsub{margin-top:4px;font-size:20px;font-weight:500;color:rgba(255,255,255,.62);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}';
+        var st6 = document.createElement('style');
+        st6.id = 'rezka-direct-css-v6';
+        try { st6.appendChild(document.createTextNode(css6)); } catch (e6) { st6.text = css6; }
+        var head6 = document.getElementsByTagName('head')[0];
+        if (head6) head6.appendChild(st6);
+        else if (document.body) document.body.appendChild(st6);
     }
     if (document.getElementById('rezka-direct-css-v4')) return;
 
@@ -382,20 +398,20 @@ function rezkaDirectPlay(url, meta) {
         $top.addClass('visible');
         $controls.addClass('visible');
         if (uiTimer) { clearTimeout(uiTimer); uiTimer = null; }
-        if (autoHide && started && !v.paused && !loading && focusZone !== 'timeline' && !modalOpen && !confirmOpen) {
+        if (autoHide && started && !v.paused && !loading && !modalOpen && !confirmOpen) {
             uiTimer = setTimeout(hideControls, 4000);
         }
     }
     function maybeAutoHide() {
         if (closed || !controlsOn) return;
         if (uiTimer) { clearTimeout(uiTimer); uiTimer = null; }
-        if (started && !v.paused && !loading && focusZone !== 'timeline' && !modalOpen && !confirmOpen) {
+        if (started && !v.paused && !loading && !modalOpen && !confirmOpen) {
             uiTimer = setTimeout(hideControls, 4000);
         }
     }
     function hideControls() {
         if (closed || !v || v.paused || loading || modalOpen || confirmOpen) return;
-        if (focusZone === 'timeline' || cursorMoved) return;
+        if (cursorMoved) resetCursor();
         forceHideControls();
     }
     function forceHideControls() {
@@ -547,7 +563,7 @@ function rezkaDirectPlay(url, meta) {
         cursorMoved = true;
         updateTimeline();
         schedulePreview(cursorTime);
-        showControls(false);
+        showControls(true);
     }
     function fineStepSec(mag) { return clamp(mag * 0.02, 0.5, 6); }
     function fineSeek(dir, mag) {
@@ -568,7 +584,7 @@ function rezkaDirectPlay(url, meta) {
         cursorMoved = true;
         updateTimeline();
         schedulePreview(cursorTime);
-        showControls(false);
+        showControls(true);
     }
     function wheelHandler(e) {
         if (closed || modalOpen) return;
@@ -628,6 +644,17 @@ function rezkaDirectPlay(url, meta) {
         var items = $modal.find('.rd-modal__item');
         items.removeClass('focus');
         items.eq(modalIdx).addClass('focus');
+        if (modalMode === 'episodes') {
+            var $list = $modal.find('.rd-modal__list');
+            var el = items.eq(modalIdx)[0];
+            var cl = $list[0];
+            if ($list.length && el && cl) {
+                var top = el.offsetTop, h = el.offsetHeight;
+                var st = cl.scrollTop;
+                if (top < st + 8) cl.scrollTop = Math.max(0, top - 8);
+                else if (top + h > st + cl.clientHeight - 8) cl.scrollTop = top + h - cl.clientHeight + 8;
+            }
+        }
     }
     function closeModal() {
         modalOpen = false;
@@ -708,6 +735,34 @@ function rezkaDirectPlay(url, meta) {
         }
         return list.length ? list[0] : null;
     }
+
+    var MONTHS = { 'января':1,'февраля':2,'марта':3,'апреля':4,'мая':5,'июня':6,'июля':7,'августа':8,'сентября':9,'октября':10,'ноября':11,'декабря':12,
+        'january':1,'february':2,'march':3,'april':4,'may':5,'june':6,'july':7,'august':8,'september':9,'october':10,'november':11,'december':12 };
+    function parseEpDate(s) {
+        if (!s) return 0;
+        var m = String(s).match(/(\d{1,2})\s*([а-яa-z]+)\s*(\d{4})/i);
+        if (m && MONTHS[m[2].toLowerCase()]) return new Date(+m[3], MONTHS[m[2].toLowerCase()] - 1, +m[1]).getTime();
+        var m2 = String(s).match(/(\d{2})\.(\d{2})\.(\d{4})/);
+        if (m2) return new Date(+m2[3], +m2[2] - 1, +m2[1]).getTime();
+        return 0;
+    }
+    function futureLabel(s) {
+        var ts = parseEpDate(s);
+        if (!ts) return '';
+        var today = new Date(); today.setHours(0, 0, 0, 0);
+        var d = new Date(ts); d.setHours(0, 0, 0, 0);
+        var diff = Math.round((d - today) / 86400000);
+        if (diff <= 0) return '';
+        if (diff === 1) return 'выйдет завтра';
+        return 'выйдет через ' + diff + ' дн.';
+    }
+    function epPercent(epId) {
+        var h = hashFor({ url: meta.url, season: meta.season, episode: epId });
+        try { var vw = Lampa.Timeline.view(h); if (vw && vw.percent) return vw.percent; } catch (e) {}
+        try { var st = Lampa.Storage.get('rezka_timeline_' + h, null); if (st && st.percent) return st.percent; } catch (e) {}
+        return 0;
+    }
+    
     function openEpisodes() {
         if (!meta || !meta._episodes || !meta._episodes.length) { showHint('Список серий недоступен'); return; }
         modalMode = 'episodes';
@@ -717,17 +772,22 @@ function rezkaDirectPlay(url, meta) {
             if (String(modalItems[i].id) === String(meta.episode)) modalIdx = i;
         }
         modalOpen = true;
-        $modal = $('<div class="rd-modal"><div class="rd-modal__box"><div class="rd-modal__title">Серии' + (meta.season ? ' (' + meta.season + ' сезон)' : '') + '</div></div></div>');
-        var $box = $modal.find('.rd-modal__box');
+        $modal = $('<div class="rd-modal rd-modal--side"><div class="rd-modal__box rd-modal__box--side"><div class="rd-modal__title">Серии' + (meta.season ? ' (' + meta.season + ' сезон)' : '') + '</div><div class="rd-modal__list"></div></div></div>');
+        var $list = $modal.find('.rd-modal__list');
         for (var j = 0; j < modalItems.length; j++) {
-            var p = 0;
-            try {
-                var vw = Lampa.Timeline.view(hashFor({ url: meta.url, season: meta.season, episode: modalItems[j].id }));
-                if (vw && vw.percent) p = vw.percent;
-            } catch (e) {}
-            var cur = String(modalItems[j].id) === String(meta.episode);
-            var label = (cur ? '▶ ' : '') + (modalItems[j].title || ('Серия ' + modalItems[j].id)) + (p ? ' — ' + p + '%' : '');
-            $box.append($('<div class="rd-modal__item"></div>').text(label));
+            var it = modalItems[j];
+            var p = epPercent(it.id);
+            var cur = String(it.id) === String(meta.episode);
+            var sub = [];
+            if (p) sub.push(p + '%');
+            var fl = futureLabel(it.date);
+            if (fl) sub.push(fl);
+            else if (it.date) sub.push(it.date);
+            var $it = $('<div class="rd-modal__item rd-modal__item--ep"></div>');
+            $it.append($('<div class="rd-modal__itemmain"></div>').text((cur ? '▶ ' : '') + (it.title || ('Серия ' + it.id))));
+            if (sub.length) $it.append($('<div class="rd-modal__itemsub"></div>').text(sub.join(' · ')));
+            if (p > 0) $it.css('background-image', 'linear-gradient(90deg, rgba(255,45,120,.30) ' + p + '%, rgba(255,255,255,0) ' + p + '%)');
+            $list.append($it);
         }
         $wrap.append($modal);
         renderModal();
@@ -1693,15 +1753,22 @@ defaultStreams: defaultStreams
 };
 }
 function scrapeEpisodesFromHtml(html) {
-var eps = {};
-var re = /<li[^>]*data-episode_id=["']?(\d+)["']?[^>]*>([\s\S]*?<\/li>)/g, m;
-while ((m = re.exec(html)) !== null) {
-var tag = m[0].slice(0, m[0].indexOf('>') + 1);
-var sid = (tag.match(/data-season_id=["']?(\d+)["']?/) || [])[1] || '1';
-if (!eps[sid]) eps[sid] = [];
-eps[sid].push({ id: m[1], title: cleanTitle(stripTags(m[2])) || ('Серия ' + m[1]) });
-}
-return eps;
+    var eps = {};
+    var re = /<li[^>]*data-episode_id=["']?(\d+)["']?[^>]*>([\s\S]*?<\/li>)/g, m;
+    while ((m = re.exec(html)) !== null) {
+        var tag = m[0].slice(0, m[0].indexOf('>') + 1);
+        var sid = (tag.match(/data-season_id=["']?(\d+)["']?/) || [])[1] || '1';
+        if (!eps[sid]) eps[sid] = [];
+        var txt = cleanTitle(stripTags(m[2]));
+        var dm = txt.match(/\d{1,2}\s*[а-яa-z]+\s*\d{4}|\d{2}\.\d{2}\.\d{4}/i);
+        var date = dm ? dm[0] : '';
+        var title = txt;
+        if (date) title = title.replace(date, '');
+        title = cleanTitle(title.replace(/^\s*\d+\s*(?:серия|серии|episode|ep\.?)\s*/i, ''));
+        if (!title || title.length > 90) title = '';
+        eps[sid].push({ id: m[1], title: title || ('Серия ' + m[1]), date: date });
+    }
+    return eps;
 }
 
 function parseQualityList(raw) {
@@ -1856,9 +1923,20 @@ getJsonAny(ajaxRel('ajax/get_cdn_series/'), formE, card.rel, card._mirror, funct
         var sd0 = fromHtml();
         if (sd0) { card._sd[voiceId] = sd0; cb(sd0); return; }
     }
-    var sd = { seasons: seasons, episodes: eps };
-    card._sd[voiceId] = sd;
-    cb(sd);
+var rich = scrapeEpisodesFromHtml(d.episodes || '');
+for (var rs in rich) {
+    if (!eps[rs]) continue;
+    for (var ri = 0; ri < eps[rs].length; ri++) {
+        var rr = null;
+        for (var rj = 0; rj < rich[rs].length; rj++) if (rich[rs][rj].id === eps[rs][ri].id) { rr = rich[rs][rj]; break; }
+        if (!rr) continue;
+        if (!eps[rs][ri].title || eps[rs][ri].title === 'Серия ' + eps[rs][ri].id) eps[rs][ri].title = rr.title;
+        eps[rs][ri].date = rr.date || eps[rs][ri].date || '';
+    }
+}
+var sd = { seasons: seasons, episodes: eps };
+card._sd[voiceId] = sd;
+cb(sd);
 }, function (e) {
     log('get_episodes failed:', e && e.message);
     var sd0 = fromHtml();
@@ -2543,7 +2621,7 @@ function prefetchTargetStream() {
 function attachPlaylist(meta2) {
     if (!card.isSerial || !episodes.length) return meta2;
     meta2._episodes = episodes.map(function (e) {
-        return { id: String(e.id), title: e.title || ('Серия ' + e.id) };
+        return { id: String(e.id), title: e.title || ('Серия ' + e.id), date: e.date || '' };
     });
     meta2._seasonId = seasonId;
     meta2._resolveStream = function (season, episode, cb, fail) {
@@ -3329,7 +3407,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '5.3.0',
+version: '5.3.1',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
