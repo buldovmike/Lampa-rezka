@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v5.2.0
+HDREZKA for Lampa/Luxo — v5.2.2
 */
 (function () {
 'use strict';
@@ -221,6 +221,7 @@ function rezkaDirectPlay(url, meta) {
     var btnIdx = 0;
     var controlsOn = false;
     var modalOpen = false, modalItems = [], modalIdx = 0;
+    var confirmOpen = false, confirmIdx = 1, $confirm = null;
 
     // курсор таймлайна
     var cursorActive = false, cursorMoved = false, cursorTime = 0;
@@ -344,21 +345,27 @@ function rezkaDirectPlay(url, meta) {
         $top.addClass('visible');
         $controls.addClass('visible');
         if (uiTimer) { clearTimeout(uiTimer); uiTimer = null; }
-        if (autoHide && started && !v.paused && !loading && focusZone !== 'timeline' && !modalOpen) {
+        if (autoHide && started && !v.paused && !loading && focusZone !== 'timeline' && !modalOpen && !confirmOpen) {
             uiTimer = setTimeout(hideControls, 4000);
         }
     }
     function maybeAutoHide() {
         if (closed || !controlsOn) return;
         if (uiTimer) { clearTimeout(uiTimer); uiTimer = null; }
-        if (started && !v.paused && !loading && focusZone !== 'timeline' && !modalOpen) {
+        if (started && !v.paused && !loading && focusZone !== 'timeline' && !modalOpen && !confirmOpen) {
             uiTimer = setTimeout(hideControls, 4000);
         }
     }
     function hideControls() {
-        if (closed || !v || v.paused || loading || modalOpen) return;
+        if (closed || !v || v.paused || loading || modalOpen || confirmOpen) return;
         if (focusZone === 'timeline' || cursorMoved) return;
+        forceHideControls();
+    }
+    function forceHideControls() {
+        if (closed) return;
         controlsOn = false;
+        btnIdx = 0;
+        if (uiTimer) { clearTimeout(uiTimer); uiTimer = null; }
         $top.removeClass('visible');
         $controls.removeClass('visible');
         hidePreview();
@@ -388,7 +395,7 @@ function rezkaDirectPlay(url, meta) {
         }
         renderFocus();
         updateTimeline();
-        showControls(false);
+        showControls(true);
     }
     function moveBtn(d) {
         btnIdx = clamp(btnIdx + d, 0, btns.length - 1);
@@ -588,6 +595,46 @@ function rezkaDirectPlay(url, meta) {
         modalOpen = false;
         if ($modal) { $modal.remove(); $modal = null; }
     }
+        function resumePlayback() {
+        try {
+            var p = v.play();
+            if (p && typeof p.catch === 'function') p.catch(handlePlayError);
+        } catch (e) { handlePlayError(e); }
+        showControls(true);
+    }
+    function openConfirm() {
+        if (closed || confirmOpen) return;
+        confirmOpen = true;
+        confirmIdx = 1;
+        try { v.pause(); } catch (e) {}
+        $confirm = $('<div class="rd-modal"><div class="rd-modal__box"><div class="rd-modal__title">Вы точно хотите прекратить просмотр?</div></div></div>');
+        var $box = $confirm.find('.rd-modal__box');
+        $box.append($('<div class="rd-modal__item"></div>').text('Да, выйти'));
+        $box.append($('<div class="rd-modal__item"></div>').text('Нет, продолжить'));
+        $wrap.append($confirm);
+        renderConfirm();
+    }
+    function renderConfirm() {
+        if (!$confirm) return;
+        var items = $confirm.find('.rd-modal__item');
+        items.removeClass('focus');
+        items.eq(confirmIdx).addClass('focus');
+    }
+    function closeConfirm() {
+        confirmOpen = false;
+        if ($confirm) { $confirm.remove(); $confirm = null; }
+    }
+    function confirmApply() {
+        var yes = confirmIdx === 0;
+        closeConfirm();
+        if (yes) { close(); return; }
+        resumePlayback();
+    }
+    function handleConfirmKey(e) {
+        if (isUpKey(e)) { confirmIdx = clamp(confirmIdx - 1, 0, 1); renderConfirm(); return; }
+        if (isDownKey(e)) { confirmIdx = clamp(confirmIdx + 1, 0, 1); renderConfirm(); return; }
+        // остальные клавиши поглощаются модалкой
+    }
     function pickQuality(label) {
         var newUrl = qMap[label];
         closeModal();
@@ -697,6 +744,7 @@ function rezkaDirectPlay(url, meta) {
     }
     function onResume() {
         if (closed || !suspended) return;
+        if (confirmOpen) { suspended = false; return; }
         suspended = false;
         var target = suspendPos;
         loading = true;
@@ -755,6 +803,7 @@ function rezkaDirectPlay(url, meta) {
         var now = Date.now();
         if (now - lastSelectAct < 250) return;
         lastSelectAct = now;
+        if (confirmOpen) { confirmApply(); return; }
         if (modalOpen) { pickQuality(modalItems[modalIdx]); return; }
         activate();
     }
@@ -771,9 +820,11 @@ function rezkaDirectPlay(url, meta) {
         try { e.preventDefault(); e.stopPropagation(); } catch (e2) {}
 
         if (isBackKey(e)) {
-            if (modalOpen) { closeModal(); showControls(false); return; }
-            if (cursorMoved) { resetCursor(); showControls(false); }
-            else close();
+            if (confirmOpen) { closeConfirm(); resumePlayback(); return; }
+            if (modalOpen) { closeModal(); showControls(true); return; }
+            if (cursorMoved) { resetCursor(); showControls(true); return; }
+            if (controlsOn) { forceHideControls(); return; }
+            openConfirm();
             return;
         }
 
@@ -783,7 +834,6 @@ function rezkaDirectPlay(url, meta) {
             selectHeld = true;
             selectConsumed = false;
             if (!controlsOn) {
-                showControls(false);
                 setZone('buttons');
                 swallowSelectUp = true;
             } else {
@@ -799,6 +849,7 @@ function rezkaDirectPlay(url, meta) {
             return;
         }
 
+        if (confirmOpen) { handleConfirmKey(e); return; }
         if (isPlayPauseKey(e)) { if (!e.repeat) togglePlay(); return; }
 
         if (modalOpen) { handleModalKey(e); return; }
@@ -807,7 +858,6 @@ function rezkaDirectPlay(url, meta) {
             if (isLeftKey(e)) { if (e.repeat) return; quickSeek(-1); return; }
             if (isRightKey(e)) { if (e.repeat) return; quickSeek(1); return; }
             if (isUpKey(e) || isDownKey(e)) {
-                showControls(false);
                 setZone('buttons');
                 return;
             }
@@ -901,6 +951,7 @@ function rezkaDirectPlay(url, meta) {
         try { removeVideoListeners(); } catch (e) {}
         try { destroyPreview(); } catch (e) {}
         try { closeModal(); } catch (e) {}
+        try { closeConfirm(); } catch (e) {}
         try { v.pause(); } catch (e) {}
         try { v.removeAttribute('src'); v.load(); } catch (e) {}
         try { $wrap.remove(); } catch (e) {}
@@ -3119,7 +3170,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '5.2.0',
+version: '5.2.2',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
