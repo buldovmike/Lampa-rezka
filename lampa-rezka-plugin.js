@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v5.4.1
+HDREZKA for Lampa/Luxo — v5.4.2
 */
 (function () {
 'use strict';
@@ -222,8 +222,32 @@ function rezkaDirectEnsureCss() {
         st.text = css;
     }
     var head = document.getElementsByTagName('head')[0];
-    if (head) head.appendChild(st);
-    else if (document.body) document.body.appendChild(st);
+ if (head) head.appendChild(st);
+ else if (document.body) document.body.appendChild(st);
+ if (!document.getElementById('rezka-direct-css-v15')) {
+     var css15 = '' +
+         '.rezka-direct .rezka-direct-controls{background:rgba(19,10,38,.55);}' +
+         '.rezka-direct .rd-btn--play{background:linear-gradient(135deg,#7c3aed,#d946ef);box-shadow:0 12px 40px rgba(168,85,247,.40);}' +
+         '.rezka-direct .rd-btn--play.focus{box-shadow:0 0 0 4px #fff,0 12px 44px rgba(217,70,239,.55);}' +
+         '.rezka-direct .rd-fill{background:linear-gradient(90deg,#6366f1,#a855f7,#ec4899);}' +
+         '.rezka-direct .rd-ep__fill{background:linear-gradient(90deg,#6366f1,#a855f7,#ec4899);}' +
+         '.rezka-direct .rd-ep__bar{height:6px;}' +
+         '.rezka-direct .rd-modal__box{background:rgba(19,10,38,.62);}' +
+         '.rezka-direct .rd-modal__box--side{background:linear-gradient(200deg,rgba(30,16,58,.88),rgba(15,8,30,.92));}' +
+         '.rezka-direct .rezka-direct-badge{background:rgba(19,10,38,.5);}' +
+         '.rezka-direct .rd-side{background:rgba(19,10,38,.66);}' +
+         '.rezka-direct .rd-preview{background:rgba(15,8,30,.72);}' +
+         '.rezka-direct .rezka-direct-ep{color:rgba(245,208,254,.85);}' +
+         '.rezka-direct .rd-modal__item--ep.current{box-shadow:inset 3px 0 0 #d946ef;}' +
+         '.rezka-direct .rd-modal__item--ep.current .rd-ep__num{background:linear-gradient(135deg,#7c3aed,#d946ef);color:#fff;}' +
+         '.rezka-direct .rd-modal__item--ep.current .rd-ep__title{color:#f5d0fe;}';
+     var st15 = document.createElement('style');
+     st15.id = 'rezka-direct-css-v15';
+     try { st15.appendChild(document.createTextNode(css15)); } catch (e15) { st15.text = css15; }
+     var head15 = document.getElementsByTagName('head')[0];
+     if (head15) head15.appendChild(st15);
+     else if (document.body) document.body.appendChild(st15);
+ }
 }
 
 function rezkaTimelineGetTime(hash) {
@@ -360,6 +384,7 @@ function rezkaDirectPlay(url, meta) {
     var confirmOpen = false, confirmIdx = 1, $confirm = null;
     var resumeOpen = false, resumeIdx = 0, $resume = null;
     var modalMode = 'quality', epBusy = false;
+    var mqTimer = null, mqEl = null;
     var autoOn = stGet('quality', 'auto') === 'auto';
     var autoTimer = null, waitTimes = [], lastWaitAt = 0, lastSwitchAt = 0, switchCount = 0;
 
@@ -744,7 +769,7 @@ function rezkaDirectPlay(url, meta) {
         var keys = [];
         for (var k in qMap) keys.push(k);
         if (!keys.length) { showHint('Информация о качествах недоступна'); return; }
-        modalItems = ['AUTO (адаптивно)'].concat(keys);
+        modalItems = ['Auto (адаптивно)'].concat(keys);
         modalIdx = 0;
         if (!autoOn) {
             for (var i = 0; i < keys.length; i++) if (keys[i] === qLabel) modalIdx = i + 1;
@@ -760,27 +785,54 @@ function rezkaDirectPlay(url, meta) {
         renderModal();
         showControls(false);
     }
-    function renderModal() {
-        if (!$modal) return;
-        var items = $modal.find('.rd-modal__item');
-        items.removeClass('focus');
-        items.eq(modalIdx).addClass('focus');
-        if (modalMode === 'episodes') {
-            var $list = $modal.find('.rd-modal__list');
-            var el = items.eq(modalIdx)[0];
-            var cl = $list[0];
-            if ($list.length && el && cl) {
-                var top = el.offsetTop, h = el.offsetHeight;
-                var st = cl.scrollTop;
-                if (top < st + 8) cl.scrollTop = Math.max(0, top - 8);
-                else if (top + h > st + cl.clientHeight - 8) cl.scrollTop = top + h - cl.clientHeight + 8;
-            }
-        }
-    }
-    function closeModal() {
-        modalOpen = false;
-        if ($modal) { $modal.remove(); $modal = null; }
-    }
+ function renderModal() {
+     if (!$modal) return;
+     var items = $modal.find('.rd-modal__item');
+     items.removeClass('focus');
+     items.eq(modalIdx).addClass('focus');
+     if (modalMode === 'episodes') {
+         var $list = $modal.find('.rd-modal__list');
+         var el = items.eq(modalIdx)[0];
+         var cl = $list[0];
+         if ($list.length && el && cl) {
+             var top = el.offsetTop, h = el.offsetHeight;
+             var st = cl.scrollTop;
+             if (top < st + 8) cl.scrollTop = Math.max(0, top - 8);
+             else if (top + h > st + cl.clientHeight - 8) cl.scrollTop = top + h - cl.clientHeight + 8;
+         }
+         marqueeStart(items.eq(modalIdx).find('.rd-ep__title')[0]);
+     }
+ }
+ function marqueeStop() {
+     if (mqTimer) { clearTimeout(mqTimer); mqTimer = null; }
+     if (mqEl) {
+         try { mqEl.style.transition = 'none'; mqEl.style.transform = 'translateX(0)'; } catch (e) {}
+         mqEl = null;
+     }
+ }
+ function marqueeStart(el) {
+     marqueeStop();
+     if (!el) return;
+     var ov = 0;
+     try { ov = el.scrollWidth - el.clientWidth; } catch (e) {}
+     if (ov <= 4) return;
+     mqEl = el;
+     var go = function (toEnd) {
+         if (!mqEl || mqEl !== el) return;
+         try {
+             el.style.transition = 'transform 1.6s cubic-bezier(.4,0,.2,1)';
+             el.style.transform = 'translateX(' + (toEnd ? -ov : 0) + 'px)';
+         } catch (e) {}
+         mqTimer = setTimeout(function () { go(!toEnd); }, 3400);
+     };
+     try { el.style.transition = 'none'; el.style.transform = 'translateX(0)'; } catch (e) {}
+     mqTimer = setTimeout(function () { go(true); }, 900);
+ }
+ function closeModal() {
+     modalOpen = false;
+     marqueeStop();
+     if ($modal) { $modal.remove(); $modal = null; }
+ }
         function resumePlayback() {
         try {
             var p = v.play();
@@ -866,11 +918,18 @@ function rezkaDirectPlay(url, meta) {
         if (isLeftKey(e)) { resumeIdx = clamp(resumeIdx - 1, 0, 1); renderResume(); return; }
         if (isRightKey(e)) { resumeIdx = clamp(resumeIdx + 1, 0, 1); renderResume(); return; }
     }
-    function pickQuality(label) {
-        var newUrl = qMap[label];
-        closeModal();
-        if (!newUrl || newUrl === currentUrl) return;
-        var keepPos = curTime();
+function pickQuality(label) {
+var newUrl = qMap[label];
+closeModal();
+autoOn = false;
+qLabel = label;
+setQBtnLabel();
+if (!newUrl || newUrl === currentUrl) {
+showControls(true);
+setTimeout(function () { if (!closed) maybeAutoHide(); }, 400);
+return;
+}
+var keepPos = curTime();
         var wasPlaying = !v.paused;
         qLabel = label;
         autoOn = false;
@@ -891,10 +950,11 @@ function rezkaDirectPlay(url, meta) {
         } catch (e) {
             log('quality switch error', e);
         }
-        log('quality switch ->', label, newUrl);
-        refreshCenter();
-        showControls(true);
-    }
+log('quality switch ->', label, newUrl);
+refreshCenter();
+showControls(true);
+setTimeout(function () { if (!closed) maybeAutoHide(); }, 1200);
+}
     
     function nextEpisode() {
         var list = (meta && meta._episodes) || [];
@@ -1040,9 +1100,9 @@ function rezkaDirectPlay(url, meta) {
     }
 
  // ---------- AUTO-качество (Phase 5) ----------
- function setQBtnLabel() {
-     if ($qBtn) $qBtn.find('span').text((autoOn ? 'AUTO · ' : '') + (qLabel || 'Качество'));
- }
+function setQBtnLabel() {
+if ($qBtn) $qBtn.find('span').text(autoOn ? ('Auto (' + (qLabel || '—') + ')') : (qLabel || 'Качество'));
+}
  function bufferedAhead() {
      try {
          var b = v.buffered;
@@ -1082,9 +1142,10 @@ function rezkaDirectPlay(url, meta) {
      } catch (e) {
          log('auto switch error', e);
      }
-     log('auto quality ->', label, newUrl);
-     refreshCenter();
- }
+log('auto quality ->', label, newUrl);
+refreshCenter();
+setTimeout(function () { if (!closed) maybeAutoHide(); }, 1200);
+}
  function autoEvaluate() {
      if (!autoOn || closed || !started || v.paused || loading || modalOpen || confirmOpen || resumeOpen || cursorActive || epBusy || suspended) return;
      var d = getDuration();
@@ -1262,7 +1323,7 @@ function rezkaDirectPlay(url, meta) {
                 return;
             }
  var pick = modalItems[modalIdx];
- if (pick === 'AUTO (адаптивно)') {
+ if (pick === 'Auto (адаптивно)') {
      autoOn = true;
      closeModal();
      setQBtnLabel();
@@ -1449,6 +1510,7 @@ function rezkaDirectPlay(url, meta) {
         try { document.removeEventListener('webkitvisibilitychange', visHandler); } catch (e) {}
         try { removeVideoListeners(); } catch (e) {}
         try { destroyPreview(); } catch (e) {}
+        try { marqueeStop(); } catch (e) {}
         try { closeModal(); } catch (e) {}
         try { closeConfirm(); } catch (e) {}
         try { closeResume(); } catch (e) {}
@@ -2556,6 +2618,12 @@ var EP_GRADS = [
 function percentOf(meta) {
 try { return Lampa.Timeline.view(hashFor(meta)).percent || 0; } catch (e) { return 0; }
 }
+function percentOfDual(meta) {
+var h = hashFor(meta);
+try { var vw = Lampa.Timeline.view(h); if (vw && vw.percent) return vw.percent; } catch (e) {}
+try { var st = Lampa.Storage.get('rezka_timeline_' + h, null); if (st && st.percent) return st.percent; } catch (e) {}
+return 0;
+}
 function playMetaWithQuality(meta, quality) {
     var keys = Object.keys(quality);
 
@@ -3076,7 +3144,7 @@ function playMovie() {
 }
 function epCardEl(e) {
     var m2 = baseMeta(); m2.episode = e.id;
-    var p = percentOf(m2);
+    var p = percentOfDual(m2);
     var future = isFutureDate(e.date);
     var dl = epDateLabel(e.date);
     var title = (e.title && e.title !== 'Серия ' + e.id) ? e.title : ('Серия ' + e.id);
@@ -3207,11 +3275,12 @@ if (still.length) searchPosters(still);
 searchPosters(missing);
 }
 }
-function hRow(title, items, builder, onEnter) {
+function hRow(title, items, builder, onEnter, opts) {
 if (!items || !items.length) return;
 var box = $('<div class="rezka-rowbox"></div>');
+if (opts && opts.cls) box.addClass(opts.cls);
 box.append(sectionTitle(title));
-var h = new Lampa.Scroll({ horizontal: true, mask: true, over: true, step: 300 });
+var h = new Lampa.Scroll({ horizontal: true, mask: !(opts && opts.nomask), over: true, step: 300 });
 var line = $('<div class="rezka-line"></div>');
 items.forEach(function (it, i) {
 var el = builder(it, i);
@@ -3317,10 +3386,10 @@ btns.append(bS);
 
 scroll.append(btns);
 if (card.isSerial && episodes.length) {
-    hRow('Серии (' + (seasonId || '') + ' сезон)', episodes, epCardEl, function (e) {
-        if (isFutureDate(e.date)) { Lampa.Noty.show('Rezka: серия ещё не вышла'); return; }
-        ensureAuth(function () { lastEpId = String(e.id); playEpisode(e); });
-    });
+hRow('Серии (' + (seasonId || '') + ' сезон)', episodes, epCardEl, function (e) {
+if (isFutureDate(e.date)) { Lampa.Noty.show('Rezka: серия ещё не вышла'); return; }
+ensureAuth(function () { lastEpId = String(e.id); playEpisode(e); });
+}, { nomask: true, cls: 'rezka-rowbox--eps' });
 }
 (card.franchise || []).forEach(function (f) {
 if (f.current) {
@@ -3808,6 +3877,8 @@ Lampa.Template.add('rezka_css', '<style>' +
 '.rezka-bar >div{background:linear-gradient(90deg,#6366f1,#a855f7,#ec4899)}' +
 '.view--rezka .full-start__button__ico{color:#a855f7}' +
 '.rezka-chip.rate{background:#7c3aed;color:#fff}' +
+'.rezka-epcard__bar{height:.5em;background:rgba(255,255,255,.22)}' +
+'.rezka-rowbox--eps .rezka-line{padding-left:.6em}' +
 '</style>');
 $('body').append(Lampa.Template.get('rezka_css', {}, true));
 }
@@ -3858,7 +3929,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '5.4.1',
+version: '5.4.2',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
