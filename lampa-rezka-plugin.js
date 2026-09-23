@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v5.3.5
+HDREZKA for Lampa/Luxo — v5.3.6
 */
 (function () {
 'use strict';
@@ -77,6 +77,23 @@ function rezkaDirectEnsureCss() {
         var head11 = document.getElementsByTagName('head')[0];
         if (head11) head11.appendChild(st11);
         else if (document.body) document.body.appendChild(st11);
+    }
+    if (!document.getElementById('rezka-direct-css-v12')) {
+        var css12 = '' +
+            '.rd-ep__main{-webkit-align-items:flex-start;align-items:flex-start;gap:12px;}' +
+            '.rd-ep__num{font-size:24px;font-weight:700;line-height:1.25;min-width:1.5em;color:rgba(255,255,255,.40);}' +
+            '.rd-ep__body{min-width:0;-webkit-flex:1;flex:1;}' +
+            '.rd-modal__list .rd-ep__title{font-size:24px;font-weight:700;line-height:1.25;}' +
+            '.rd-ep__titleen{margin-top:2px;font-size:18px;}' +
+            '.rd-ep__meta{margin-top:4px;font-size:18px;}' +
+            '.rd-ep__bar{margin-top:8px;}' +
+            '.rezka-direct-ep{top:36px;right:48px;font-size:24px;font-weight:500;color:rgba(255,255,255,.78);}';
+        var st12 = document.createElement('style');
+        st12.id = 'rezka-direct-css-v12';
+        try { st12.appendChild(document.createTextNode(css12)); } catch (e12) { st12.text = css12; }
+        var head12 = document.getElementsByTagName('head')[0];
+        if (head12) head12.appendChild(st12);
+        else if (document.body) document.body.appendChild(st12);
     }
     if (document.getElementById('rezka-direct-css-v7')) return;
 
@@ -844,16 +861,17 @@ function rezkaDirectPlay(url, meta) {
         if (m2) return new Date(+m2[3], +m2[2] - 1, +m2[1]).getTime();
         return 0;
     }
-    function futureLabel(s) {
-        var ts = parseEpDate(s);
-        if (!ts) return '';
-        var today = new Date(); today.setHours(0, 0, 0, 0);
-        var d = new Date(ts); d.setHours(0, 0, 0, 0);
-        var diff = Math.round((d - today) / 86400000);
-        if (diff <= 0) return '';
-        if (diff === 1) return 'выйдет завтра';
-        return 'выйдет через ' + diff + ' дн.';
-    }
+     function dateLabel(s) {
+         var ts = parseEpDate(s);
+         if (!ts) return '';
+         var today = new Date(); today.setHours(0, 0, 0, 0);
+         var d = new Date(ts); d.setHours(0, 0, 0, 0);
+         var diff = Math.round((d - today) / 86400000);
+         if (diff > 1) return 'Выйдет: через ' + diff + ' дн.';
+         if (diff === 1) return 'Выйдет: завтра';
+         if (diff === 0) return 'Вышло: сегодня';
+         return 'Вышло: ' + s;
+     }
     function epPercent(epId) {
         var h = hashFor({ url: meta.url, season: meta.season, episode: epId });
         try { var vw = Lampa.Timeline.view(h); if (vw && vw.percent) return vw.percent; } catch (e) {}
@@ -880,28 +898,29 @@ function rezkaDirectPlay(url, meta) {
             var hasTitle = !!it.title && it.title !== ('Серия ' + it.id);
             var ru = hasTitle ? String(it.title || '') : '';
             var en = hasTitle ? String(it.en || '') : '';
-            var fl = futureLabel(it.date);
+            var dl = dateLabel(it.date);
             var metaLine = [];
-            if (fl) metaLine.push(fl);
-            else if (it.date) metaLine.push('Выход: ' + it.date);
+            if (dl) metaLine.push(dl);
             if (p) metaLine.push(p + '%');
             var $it = $('<div class="rd-modal__item rd-modal__item--ep"></div>');
             if (cur) $it.addClass('current');
             var $main = $('<div class="rd-ep__main"></div>');
+            var $body = $('<div class="rd-ep__body"></div>');
             if (hasTitle) {
                 $main.append($('<span class="rd-ep__num"></span>').text(it.id));
-                $main.append($('<div class="rd-ep__title"></div>').text(ru));
+                $body.append($('<div class="rd-ep__title"></div>').text(ru));
             } else {
-                $main.append($('<div class="rd-ep__title rd-ep__title--plain"></div>').text('Серия ' + it.id));
+                $body.append($('<div class="rd-ep__title rd-ep__title--plain"></div>').text('Серия ' + it.id));
             }
-            $it.append($main);
-            if (en) $it.append($('<div class="rd-ep__titleen"></div>').text(en));
-            if (metaLine.length) $it.append($('<div class="rd-ep__meta"></div>').text(metaLine.join(' · ')));
+            if (en) $body.append($('<div class="rd-ep__titleen"></div>').text(en));
+            if (metaLine.length) $body.append($('<div class="rd-ep__meta"></div>').text(metaLine.join(' · ')));
             if (p > 0) {
                 var $bar = $('<div class="rd-ep__bar"></div>');
                 $bar.append($('<div class="rd-ep__fill"></div>').css('width', p + '%'));
-                $it.append($bar);
+                $body.append($bar);
             }
+            $main.append($body);
+            $it.append($main);
             $list.append($it);
         }
         $wrap.append($modal);
@@ -2213,6 +2232,29 @@ function prefetchStream(card, voiceId, season, episode) {
 }
 
 function apiStream(card, voiceId, season, episode, cb, fail) {
+    var t0s = Date.now();
+    var _cb = cb, _fail = fail;
+    var pkey = streamCacheKey(card, voiceId, season, episode);
+    card._streamPending = card._streamPending || {};
+    if (card._streamPending[pkey]) {
+        card._streamPending[pkey].push({ cb: _cb, fail: _fail });
+        log('apiStream: join in-flight request', pkey);
+        return;
+    }
+    card._streamPending[pkey] = [];
+    cb = function (map) {
+        var ws = card._streamPending[pkey];
+        delete card._streamPending[pkey];
+        log('apiStream: resolved in', Date.now() - t0s, 'ms');
+        _cb(map);
+        for (var wi = 0; ws && wi < ws.length; wi++) ws[wi].cb(map);
+    };
+    fail = function (e) {
+        var ws = card._streamPending[pkey];
+        delete card._streamPending[pkey];
+        _fail(e);
+        for (var wi = 0; ws && wi < ws.length; wi++) ws[wi].fail(e);
+    };
 var v = null, i;
 for (i = 0; i < (card.translators || []).length; i++) {
 if (card.translators[i].id === voiceId) v = card.translators[i];
@@ -2332,6 +2374,26 @@ safe.ts = Date.now();
 list.unshift(safe);
 histSave(list);
 }
+var MONTHS_MAP = { 'января':1,'февраля':2,'марта':3,'апреля':4,'мая':5,'июня':6,'июля':7,'августа':8,'сентября':9,'октября':10,'ноября':11,'декабря':12 };
+function parseDateTs(s) {
+    if (!s) return 0;
+    var m = String(s).match(/(\d{1,2})\s*([а-яa-z]+)\s*(\d{4})/i);
+    if (m && MONTHS_MAP[m[2].toLowerCase()]) return new Date(+m[3], MONTHS_MAP[m[2].toLowerCase()] - 1, +m[1]).getTime();
+    var m2 = String(s).match(/(\d{2})\.(\d{2})\.(\d{4})/);
+    if (m2) return new Date(+m2[3], +m2[2] - 1, +m2[1]).getTime();
+    return 0;
+}
+function epDateLabel(s) {
+    var ts = parseDateTs(s);
+    if (!ts) return '';
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    var d = new Date(ts); d.setHours(0, 0, 0, 0);
+    var diff = Math.round((d - today) / 86400000);
+    if (diff > 1) return 'Выйдет: через ' + diff + ' дн.';
+    if (diff === 1) return 'Выйдет: завтра';
+    if (diff === 0) return 'Вышло: сегодня';
+    return 'Вышло: ' + s;
+}     
 function percentOf(meta) {
 try { return Lampa.Timeline.view(hashFor(meta)).percent || 0; } catch (e) { return 0; }
 }
@@ -2366,14 +2428,12 @@ function playMeta(meta) {
         return;
     }
 
-    log('playMeta: cache miss, resolving stream');
-
-    Lampa.Loading.start(function () {
-        Lampa.Loading.stop();
-    });
-
-    apiStream(meta._card, meta.voice_id, meta.season, meta.episode, function (quality) {
-        Lampa.Loading.stop();
+     log('playMeta: cache miss, resolving stream');
+     var t0 = Date.now();
+     Lampa.Loading.start();
+     apiStream(meta._card, meta.voice_id, meta.season, meta.episode, function (quality) {
+     Lampa.Loading.stop();
+     log('playMeta: stream resolved in', Date.now() - t0, 'ms');
 
         streamCacheSet(meta._card, meta.voice_id, meta.season, meta.episode, quality);
 
@@ -3073,7 +3133,7 @@ btns.append(bS);
 if (card.isSerial) {
 var curEp = null;
 for (var ei = 0; ei < episodes.length; ei++) if (String(episodes[ei].id) === String(lastEpId)) curEp = episodes[ei];
-var bE = btnEl('Серия: ' + (curEp ? ('№' + curEp.id) : (episodes.length ? 'выбрать' : '—')));
+var bE = btnEl('Серия: ' + (curEp ? curEp.id : (episodes.length ? 'выбрать' : '—')));
 bE.attr('data-fk', 'episode');
 bE.on('hover:focus', function () { setLast(bE); scroll.update(bE, true); });
 bE.on('hover:enter', function () {
@@ -3083,7 +3143,12 @@ title: 'Серии' + (seasonId ? ' (' + seasonId + ' сезон)' : ''),
 items: episodes.map(function (e) {
 var m2 = baseMeta(); m2.episode = e.id;
 var p = percentOf(m2);
-return { title: 'Серия ' + e.id + (p ? ' — ' + Math.round(p) + '%' : ''), id: e.id };
+var parts = ['Серия ' + e.id];
+if (e.title && e.title !== 'Серия ' + e.id) parts.push(e.title);
+if (p) parts.push(Math.round(p) + '%');
+var dl = epDateLabel(e.date);
+if (dl) parts.push(dl);
+return { title: parts.join(' · '), id: e.id };
 }),
 onSelect: function (s) {
 Lampa.Select.close();
@@ -3618,7 +3683,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '5.3.5',
+version: '5.3.6',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
