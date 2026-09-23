@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v5.3.4
+HDREZKA for Lampa/Luxo — v5.3.5
 */
 (function () {
 'use strict';
@@ -60,6 +60,23 @@ function rezkaDirectEnsureCss() {
         var head10 = document.getElementsByTagName('head')[0];
         if (head10) head10.appendChild(st10);
         else if (document.body) document.body.appendChild(st10);
+    }
+    if (!document.getElementById('rezka-direct-css-v11')) {
+        var css11 = '' +
+            '.rezka-direct-ep{top:38px;right:48px;max-width:30vw;font-size:22px;font-weight:600;color:rgba(255,255,255,.72);}' +
+            '.rd-modal__box--side .rd-modal__count{font-size:19px;}' +
+            '.rd-modal__item--ep{padding:12px 20px;}' +
+            '.rd-modal__list .rd-ep__num{min-width:2ch;font-size:20px;color:rgba(255,255,255,.38);}' +
+            '.rd-modal__list .rd-ep__title{font-size:24px;font-weight:700;letter-spacing:.1px;}' +
+            '.rd-ep__titleen{font-size:18px;color:rgba(255,255,255,.48);}' +
+            '.rd-ep__meta{font-size:18px;color:rgba(255,255,255,.45);}' +
+            '.rd-ep__bar{height:3px;margin-top:8px;}';
+        var st11 = document.createElement('style');
+        st11.id = 'rezka-direct-css-v11';
+        try { st11.appendChild(document.createTextNode(css11)); } catch (e11) { st11.text = css11; }
+        var head11 = document.getElementsByTagName('head')[0];
+        if (head11) head11.appendChild(st11);
+        else if (document.body) document.body.appendChild(st11);
     }
     if (document.getElementById('rezka-direct-css-v7')) return;
 
@@ -315,12 +332,7 @@ function rezkaDirectPlay(url, meta) {
     $top.append($sub);
     var $epTitle = $('<div class="rezka-direct-ep"></div>');
     $top.append($epTitle);
-    function splitRuEn(s) {
-     var t = String(s || '').trim();
-     var m = t.match(/^([А-Яа-яЁё][А-Яа-яЁё\s\-.!?,0-9«»"'']*)([A-Za-z0-9][A-Za-z0-9\s\-.!?,_'':()&]*)$/);
-     if (m && m[1] && m[2]) return { ru: cleanTitle(m[1]), en: cleanTitle(m[2]) };
-     return { ru: t, en: '' };
- }
+    
  function updateSub() {
      var s = [];
      if (meta && meta.voice) s.push(meta.voice);
@@ -328,8 +340,8 @@ function rezkaDirectPlay(url, meta) {
      $sub.text(s.join(' • '));
      var et = '';
      if (meta && meta._episodes && meta.episode) {
-         var raw = epLabel(meta.episode);
-         if (raw && raw !== 'Серия ' + meta.episode) et = splitRuEn(raw).ru;
+        var raw = epLabel(meta.episode);
+        if (raw && raw !== 'Серия ' + meta.episode) et = raw;
      }
      $epTitle.text(et);
  }
@@ -866,9 +878,8 @@ function rezkaDirectPlay(url, meta) {
             var p = epPercent(it.id);
             var cur = String(it.id) === String(meta.episode);
             var hasTitle = !!it.title && it.title !== ('Серия ' + it.id);
-            var parts = splitRuEn(String(it.title || ''));
-            var ru = hasTitle ? (parts.ru || it.title) : '';
-            var en = hasTitle ? parts.en : '';
+            var ru = hasTitle ? String(it.title || '') : '';
+            var en = hasTitle ? String(it.en || '') : '';
             var fl = futureLabel(it.date);
             var metaLine = [];
             if (fl) metaLine.push(fl);
@@ -1884,6 +1895,12 @@ user_hash: '', defaultTranslatorId: defaultTranslatorId,
 defaultStreams: defaultStreams
 };
 }
+function splitRuEnPlugin(s) {
+    var t = cleanTitle(String(s || ''));
+    var m = t.match(/^([А-Яа-яЁё][А-Яа-яЁё\s\-.!?,0-9«»"'']*)([A-Za-z0-9][A-Za-z0-9\s\-.!?,_'':()&]*)$/);
+    if (m && m[1] && m[2]) return { ru: cleanTitle(m[1]), en: cleanTitle(m[2]) };
+    return { ru: t, en: '' };
+}
 function scrapeEpisodesFromHtml(html) {
     var eps = {};
     var re = /<li[^>]*data-episode_id=["']?(\d+)["']?[^>]*>([\s\S]*?<\/li>)/g, m;
@@ -1898,7 +1915,8 @@ function scrapeEpisodesFromHtml(html) {
         if (date) title = title.replace(date, '');
         title = cleanTitle(title.replace(/^\s*\d+\s*(?:серия|серии|episode|ep\.?)\s*/i, ''));
         if (!title || title.length > 90) title = '';
-        eps[sid].push({ id: m[1], title: title || ('Серия ' + m[1]), date: date });
+        var se = splitRuEnPlugin(title);
+        eps[sid].push({ id: m[1], title: (se.ru || ('Серия ' + m[1])), en: se.en, date: date });
     }
     return eps;
 }
@@ -1909,18 +1927,38 @@ function scrapeScheduleFromHtml(html) {
     try {
         var doc = new DOMParser().parseFromString(html, 'text/html');
         nodeList('tr', doc).forEach(function (tr) {
-            var txt = cleanTitle(stripTags(tr.textContent || ''));
-            if (!txt) return;
-            var m = txt.match(/^(\d+)\s*сезон\s*(\d+)\s*серия/i);
+            var tds = tr.querySelectorAll('td');
+            var rowTxt = cleanTitle(stripTags(tr.textContent || ''));
+            if (!rowTxt) return;
+            var m = rowTxt.match(/^(\d+)\s*сезон\s*(\d+)\s*серия/i);
+            if (!m && tds.length) m = cleanTitle(stripTags(tds[0].textContent || '')).match(/^(\d+)\s*сезон\s*(\d+)\s*серия/i);
             if (!m) return;
-            var dm = txt.match(/\d{1,2}\s*[а-яa-z]+\s*\d{4}|\d{2}\.\d{2}\.\d{4}/i);
-            var title = cleanTitle(txt.replace(m[0], '').replace(/[✓✔]/g, ' ').replace(/\s+/g, ' ').trim());
-            if (!title || title.length > 120) title = '';
+            var ru = '', en = '', date = '';
+            var tdTitle = tr.querySelector('td.td-2') || (tds.length >= 2 ? tds[1] : null);
+            if (tdTitle) {
+                ru = cleanTitle(textOf(tdTitle.querySelector('b')));
+                en = cleanTitle(textOf(tdTitle.querySelector('span')));
+                if (!ru) ru = cleanTitle(stripTags(tdTitle.textContent || ''));
+            }
+            var tdDate = tr.querySelector('td.td-4') || (tds.length >= 4 ? tds[3] : null);
+            if (tdDate) date = cleanTitle(stripTags(tdDate.textContent || ''));
+            if (!date) {
+                var dm = rowTxt.match(/\d{1,2}\s*[а-яa-z]+\s*\d{4}|\d{2}\.\d{2}\.\d{4}/i);
+                date = dm ? dm[0] : '';
+            }
+            if (!ru) {
+                var t2 = rowTxt.replace(m[0], '');
+                if (date) t2 = t2.replace(date, '');
+                ru = cleanTitle(t2.replace(/[✓✔]/g, ' '));
+            }
+            if (!ru || ru.length > 120) ru = '';
+            if (en && en.length > 120) en = '';
             var key = m[1] + '|' + m[2];
-            if (!out[key]) out[key] = { title: title, date: dm ? dm[0] : '' };
+            if (!out[key]) out[key] = { ru: ru, en: en, date: date, title: ru };
             else {
-                if (!out[key].title && title) out[key].title = title;
-                if (!out[key].date && dm) out[key].date = dm[0];
+                if (!out[key].ru && ru) { out[key].ru = ru; out[key].title = ru; }
+                if (!out[key].en && en) out[key].en = en;
+                if (!out[key].date && date) out[key].date = date;
             }
         });
     } catch (e) {}
@@ -1935,8 +1973,9 @@ function mergeSchedule(card, sd) {
             var e = sd.episodes[sid][i];
             var s = sched[sid + '|' + e.id];
             if (!s) continue;
-            if (!e.title || e.title === 'Серия ' + e.id) e.title = s.title || e.title;
-            if (!e.date) e.date = s.date || '';
+            if (s.ru) e.title = s.ru;
+            if (s.en) e.en = s.en;
+            if (s.date) e.date = s.date;
         }
     }
     return sd;
@@ -2793,7 +2832,7 @@ function prefetchTargetStream() {
 function attachPlaylist(meta2) {
     if (!card.isSerial || !episodes.length) return meta2;
     meta2._episodes = episodes.map(function (e) {
-        return { id: String(e.id), title: e.title || ('Серия ' + e.id), date: e.date || '' };
+        return { id: String(e.id), title: e.title || ('Серия ' + e.id), en: e.en || '', date: e.date || '' };
     });
     meta2._seasonId = seasonId;
     meta2._resolveStream = function (season, episode, cb, fail) {
@@ -3034,7 +3073,7 @@ btns.append(bS);
 if (card.isSerial) {
 var curEp = null;
 for (var ei = 0; ei < episodes.length; ei++) if (String(episodes[ei].id) === String(lastEpId)) curEp = episodes[ei];
-var bE = btnEl('Серия: ' + (curEp ? (curEp.title || ('№' + curEp.id)) : (episodes.length ? 'выбрать' : '—')));
+var bE = btnEl('Серия: ' + (curEp ? ('№' + curEp.id) : (episodes.length ? 'выбрать' : '—')));
 bE.attr('data-fk', 'episode');
 bE.on('hover:focus', function () { setLast(bE); scroll.update(bE, true); });
 bE.on('hover:enter', function () {
@@ -3044,7 +3083,7 @@ title: 'Серии' + (seasonId ? ' (' + seasonId + ' сезон)' : ''),
 items: episodes.map(function (e) {
 var m2 = baseMeta(); m2.episode = e.id;
 var p = percentOf(m2);
-return { title: (e.title || ('Серия ' + e.id)) + (p ? ' — ' + Math.round(p) + '%' : ''), id: e.id };
+return { title: 'Серия ' + e.id + (p ? ' — ' + Math.round(p) + '%' : ''), id: e.id };
 }),
 onSelect: function (s) {
 Lampa.Select.close();
@@ -3579,7 +3618,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '5.3.4',
+version: '5.3.5',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
