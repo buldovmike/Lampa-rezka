@@ -1,5 +1,5 @@
 /**
-HDREZKA for Lampa/Luxo — v5.4.0
+HDREZKA for Lampa/Luxo — v5.4.1
 */
 (function () {
 'use strict';
@@ -111,6 +111,37 @@ function rezkaDirectEnsureCss() {
         var head13 = document.getElementsByTagName('head')[0];
         if (head13) head13.appendChild(st13);
         else if (document.body) document.body.appendChild(st13);
+    }
+    if (!document.getElementById('rezka-direct-css-v14')) {
+        var css14 = '' +
+            '.rezka-direct-controls{background:rgba(19,10,38,.55);}' +
+            '.rd-btn--play{background:linear-gradient(135deg,#7c3aed,#d946ef);box-shadow:0 12px 40px rgba(168,85,247,.45);}' +
+            '.rd-btn--play.focus{box-shadow:0 0 0 4px #fff,0 12px 44px rgba(217,70,239,.55);}' +
+            '.rd-fill{background:linear-gradient(90deg,#6366f1,#a855f7,#ec4899);}' +
+            '.rd-modal__box{background:rgba(19,10,38,.62);}' +
+            '.rd-modal__box--side{background:linear-gradient(200deg,rgba(30,16,58,.88),rgba(15,8,30,.92));}' +
+            '.rezka-direct-badge{background:rgba(19,10,38,.5);}' +
+            '.rd-side{background:rgba(19,10,38,.66);}' +
+            '.rd-preview{background:rgba(15,8,30,.72);}' +
+            '.rezka-direct-ep{color:rgba(245,208,254,.85);}' +
+            '.rd-modal__box--side .rd-modal__list{padding:4px 10px 18px;}' +
+            '.rd-modal__item--ep{padding:18px 24px;margin-bottom:14px;border-radius:20px;background:rgba(255,255,255,.07);}' +
+            '.rd-modal__item--ep.focus{background:rgba(255,255,255,.16);box-shadow:inset 0 0 0 3px #fff;-webkit-transform:none;transform:none;}' +
+            '.rd-ep__main{gap:20px;}' +
+            '.rd-ep__num{display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center;width:2.6em;height:2.6em;min-width:2.6em;border-radius:.85em;background:rgba(255,255,255,.10);font-size:24px;font-weight:700;color:rgba(255,255,255,.78);text-align:center;}' +
+            '.rd-modal__list .rd-ep__title{font-size:30px;}' +
+            '.rd-ep__titleen{font-size:22px;}' +
+            '.rd-ep__meta{font-size:22px;}' +
+            '.rd-ep__bar{height:4px;}' +
+            '.rd-ep__fill{background:linear-gradient(90deg,#6366f1,#a855f7,#ec4899);}' +
+            '.rd-modal__item--ep.current .rd-ep__num{background:linear-gradient(135deg,#7c3aed,#d946ef);color:#fff;}' +
+            '.rd-modal__item--ep.current .rd-ep__title{color:#f5d0fe;}';
+        var st14 = document.createElement('style');
+        st14.id = 'rezka-direct-css-v14';
+        try { st14.appendChild(document.createTextNode(css14)); } catch (e14) { st14.text = css14; }
+        var head14 = document.getElementsByTagName('head')[0];
+        if (head14) head14.appendChild(st14);
+        else if (document.body) document.body.appendChild(st14);
     }
     if (document.getElementById('rezka-direct-css-v7')) return;
 
@@ -722,8 +753,8 @@ function rezkaDirectPlay(url, meta) {
         modalMode = 'quality';
         $modal = $('<div class="rd-modal"><div class="rd-modal__box"><div class="rd-modal__title">Качество</div></div></div>');
         var $box = $modal.find('.rd-modal__box');
-        for (var j = 0; j < keys.length; j++) {
-            $box.append($('<div class="rd-modal__item"></div>').text(keys[j]));
+        for (var j = 0; j < modalItems.length; j++) {
+            $box.append($('<div class="rd-modal__item"></div>').text(modalItems[j]));
         }
         $wrap.append($modal);
         renderModal();
@@ -3048,18 +3079,20 @@ function epCardEl(e) {
     var p = percentOf(m2);
     var future = isFutureDate(e.date);
     var dl = epDateLabel(e.date);
-    var grad = EP_GRADS[Number(e.id) % EP_GRADS.length];
     var title = (e.title && e.title !== 'Серия ' + e.id) ? e.title : ('Серия ' + e.id);
     var metaParts = [];
     if (!future && dl) metaParts.push(dl);
     if (p) metaParts.push(Math.round(p) + '%');
     if (future) metaParts.push('Ожидается');
     var el = $('<div class="rezka-epcard selector' + (String(e.id) === String(lastEpId) ? ' cur' : '') + '">' +
-        '<div class="rezka-epcard__tile" style="background:' + grad + '">' +
-        '<div class="rezka-epcard__num">' + esc(e.id) + '</div>' +
+        '<div class="rezka-epcard__tile">' +
+        (card.poster ? '<div class="rezka-epcard__bg" style="background-image:url(\'' + esc(card.poster) + '\')"></div>' : '') +
+        '<div class="rezka-epcard__shade"></div>' +
+        (future
+            ? '<div class="rezka-epcard__future">' + esc(dl || 'Выйдет скоро') + '</div>'
+            : '<div class="rezka-epcard__label">Серия ' + esc(e.id) + '</div>') +
         (p > 0 ? '<div class="rezka-epcard__pct">' + Math.round(p) + '%</div>' : '') +
-        (future ? '<div class="rezka-epcard__future">' + esc(dl || 'Выйдет скоро') + '</div>' : '') +
-        (p > 0 ? '<div class="rezka-epcard__bar"><div style="width:' + Math.round(p) + '%"></div></div>' : '') +
+        '<div class="rezka-epcard__bar"><div style="width:' + Math.round(p) + '%"></div></div>' +
         '</div>' +
         '<div class="rezka-epcard__t">' + esc(title) + '</div>' +
         '<div class="rezka-epcard__m">' + esc(metaParts.join(' · ')) + '</div>' +
@@ -3759,17 +3792,22 @@ Lampa.Template.add('rezka_css', '<style>' +
 '.rezka-cont__info{width:16em;flex-shrink:0;text-align:right;color:#8a8a8a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
 '.rezka-cont--head .rezka-cont__title,.rezka-cont--head .rezka-cont__info{color:#9a9a9a}' +
 '.view--rezka .full-start__button__ico{color:#5c86c5}' +
-'.rezka-epcard{width:16em;margin:0 1.2em 1.6em 0}' +
-'.rezka-epcard__tile{position:relative;width:16em;height:9em;border-radius:.8em;overflow:hidden;box-shadow:inset 0 0 0 .06em #ffffff14}' +
-'.rezka-epcard__num{position:absolute;right:.5em;bottom:-.15em;font-size:3.6em;font-weight:800;color:rgba(255,255,255,.16);line-height:1}' +
-'.rezka-epcard__pct{position:absolute;left:.6em;top:.5em;padding:.15em .6em;border-radius:.5em;background:rgba(0,0,0,.55);font-size:.85em;font-weight:700;color:#5eead4}' +
-'.rezka-epcard__future{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.62);font-size:1em;font-weight:600;color:#ffd76a;text-align:center;padding:0 .8em;box-sizing:border-box}' +
-'.rezka-epcard__bar{position:absolute;left:0;right:0;bottom:0;height:.35em;background:rgba(0,0,0,.5)}' +
-'.rezka-epcard__bar >div{height:100%;background:#14b8a6}' +
-'.rezka-epcard.cur .rezka-epcard__tile{box-shadow:inset 0 0 0 .14em #14b8a6}' +
+'.rezka-epcard{width:17em;margin:0 1.2em 1.8em 0}' +
+'.rezka-epcard__tile{position:relative;width:17em;height:9.6em;border-radius:1em;overflow:hidden;background:#170b2e;box-shadow:inset 0 0 0 .06em #ffffff14}' +
+'.rezka-epcard__bg{position:absolute;left:-8%;top:-8%;width:116%;height:116%;background-size:cover;background-position:50% 35%;-webkit-filter:blur(14px) brightness(.5) saturate(1.15);filter:blur(14px) brightness(.5) saturate(1.15);}' +
+'.rezka-epcard__shade{position:absolute;left:0;right:0;top:0;bottom:0;background:linear-gradient(160deg,rgba(76,29,149,.35),rgba(15,8,30,.78))}' +
+'.rezka-epcard__label{position:absolute;left:50%;top:50%;-webkit-transform:translate(-50%,-50%);transform:translate(-50%,-50%);padding:.4em 1.1em;border-radius:999px;background:rgba(20,10,40,.55);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);font-size:1.15em;font-weight:700;color:#fff;white-space:nowrap}' +
+'.rezka-epcard.cur .rezka-epcard__label{background:linear-gradient(135deg,#7c3aed,#d946ef);box-shadow:0 6px 22px rgba(217,70,239,.45)}' +
+'.rezka-epcard__pct{position:absolute;right:.6em;top:.55em;padding:.15em .65em;border-radius:.6em;background:rgba(15,8,30,.62);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);font-size:.85em;font-weight:700;color:#f5d0fe}' +
+'.rezka-epcard__future{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;background:rgba(10,5,20,.66);font-size:1em;font-weight:600;color:#f0abfc;text-align:center;padding:0 .8em;box-sizing:border-box}' +
+'.rezka-epcard__bar{position:absolute;left:0;right:0;bottom:0;height:.38em;background:rgba(255,255,255,.16)}' +
+'.rezka-epcard__bar >div{height:100%;background:linear-gradient(90deg,#6366f1,#a855f7,#ec4899)}' +
 '.rezka-epcard.focus .rezka-epcard__tile{box-shadow:0 0 0 .25em #fff}' +
-'.rezka-epcard__t{margin-top:.6em;font-size:1.05em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-'.rezka-epcard__m{font-size:.85em;color:#8a8a8a;margin-top:.2em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+'.rezka-epcard__t{margin-top:.65em;font-size:1.05em;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+'.rezka-epcard__m{font-size:.88em;color:#9a8fb8;margin-top:.25em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+'.rezka-bar >div{background:linear-gradient(90deg,#6366f1,#a855f7,#ec4899)}' +
+'.view--rezka .full-start__button__ico{color:#a855f7}' +
+'.rezka-chip.rate{background:#7c3aed;color:#fff}' +
 '</style>');
 $('body').append(Lampa.Template.get('rezka_css', {}, true));
 }
@@ -3820,7 +3858,7 @@ Lampa.Component.add(COMP_LIST, RezkaList);
 Lampa.Component.add(COMP_CARD, RezkaCard);
 Lampa.Manifest.plugins = {
 type: 'video',
-version: '5.4.0',
+version: '5.4.1',
 name: 'HDREZKA Lab',
 description: 'Фильмы и сериалы с rezka: карточка в стиле Lampa, франшизы, актёры, качества',
 component: COMP_MAIN,
